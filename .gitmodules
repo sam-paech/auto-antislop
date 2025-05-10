@@ -1,0 +1,6 @@
+[submodule "antislop-vllm"]
+	path = antislop-vllm
+	url = https://github.com/sam-paech/antislop-vllm.git
+[submodule "slop-forensics"]
+	path = slop-forensics
+	url = https://github.com/sam-paech/slop-forensics.git
