@@ -1,47 +1,18 @@
 
 # %%
-# %%
-##################################
-# Imports                        #
-##################################
-import json, subprocess, sys, math, re, itertools, collections, os, pathlib, datetime
-from pathlib import Path
-from collections import Counter, defaultdict
-import pandas as pd
-import nltk
-import numpy as np
 
-# --- Add local submodule to Python path ---
-# This allows importing from the slop-forensics submodule directly.
-# Assumes the notebook is in the root of 'auto-antislop' and 'slop-forensics' is a subdirectory.
-_slop_forensics_submodule_path = Path.cwd() / "slop-forensics"
-if _slop_forensics_submodule_path.is_dir():
-    # Add the 'slop-forensics' directory (which contains the 'slop_forensics' package)
-    # to the Python path.
-    sys.path.insert(0, str(_slop_forensics_submodule_path.resolve()))
-    print(f"INFO: Added '{_slop_forensics_submodule_path.resolve()}' to sys.path for slop_forensics imports.")
-else:
-    print(f"WARNING: Submodule directory '{_slop_forensics_submodule_path}' not found. "
-          "Imports from 'slop_forensics' might fail.")
-# --- End of submodule path addition ---
-
-from slop_forensics.slop_lists import extract_and_save_slop_phrases as _extract_slop_phrases
-from slop_forensics import config as _sf_cfg
-from slop_forensics.analysis import (
-    get_word_counts, filter_mostly_numeric, merge_plural_possessive_s,
-    filter_stopwords, filter_common_words, analyze_word_rarity,
-    find_over_represented_words
-)
-from wordfreq import word_frequency   # used inside the toolkit too
 
 
 # %%
 ##################################
 # Pipeline Parameters            #
 ##################################
+from pathlib import Path
 
 MODEL_ID = "unsloth/gemma-3-4b-it"
 VLLM_PORT=8888
+API_BASE_URL = f"http://localhost:{str(VLLM_PORT)}/v1"
+API_KEY = "xxx"
 
 
 # Number of unslopping iterations to run
@@ -130,6 +101,8 @@ EXTRA_REGEX_PATTERNS       = [               # Python regexps to ban
 ]
 
 
+import nltk
+import re
 # Ensure nltk resources are available
 def download_nltk_resource(resource_id, resource_name):
     try:
@@ -149,6 +122,41 @@ download_nltk_resource('corpora/stopwords', 'stopwords')
 
 from nltk import ngrams
 from nltk.corpus import stopwords
+
+# %%
+##################################
+# Imports                        #
+##################################
+import json, subprocess, sys, math, re, itertools, collections, os, pathlib, datetime
+from collections import Counter, defaultdict
+import pandas as pd
+import nltk
+import numpy as np
+
+# --- Add local submodule to Python path ---
+# This allows importing from the slop-forensics submodule directly.
+# Assumes the notebook is in the root of 'auto-antislop' and 'slop-forensics' is a subdirectory.
+_slop_forensics_submodule_path = Path.cwd() / "slop-forensics"
+if _slop_forensics_submodule_path.is_dir():
+    # Add the 'slop-forensics' directory (which contains the 'slop_forensics' package)
+    # to the Python path.
+    sys.path.insert(0, str(_slop_forensics_submodule_path.resolve()))
+    print(f"INFO: Added '{_slop_forensics_submodule_path.resolve()}' to sys.path for slop_forensics imports.")
+else:
+    print(f"WARNING: Submodule directory '{_slop_forensics_submodule_path}' not found. "
+          "Imports from 'slop_forensics' might fail.")
+# --- End of submodule path addition ---
+
+from slop_forensics.slop_lists import extract_and_save_slop_phrases as _extract_slop_phrases
+from slop_forensics import config as _sf_cfg
+from slop_forensics.analysis import (
+    get_word_counts, filter_mostly_numeric, merge_plural_possessive_s,
+    filter_stopwords, filter_common_words, analyze_word_rarity,
+    find_over_represented_words
+)
+from wordfreq import word_frequency   # used inside the toolkit too
+
+
 
 # Attempt to import from slop_forensics. If not found, provide stubs.
 # In a real environment, ensure slop_forensics is in PYTHONPATH or installed.
@@ -206,10 +214,10 @@ def run_generation_script(
     """Invoke antislop-vllm/main.py with the appropriate blocklists."""
 
     # -------- locate main.py -----------------------------------------------
-    main_py = Path.cwd() / "main.py"
+    main_py = Path.cwd() / "antislop-vllm" / "main.py"
     if not main_py.exists():                                      # fallback if cwd is already antislop-vllm
         alt = Path.cwd() / "main.py"
-        if alt.exists():
+        if Path.cwd().name == "antislop-vllm" and alt.exists():
             main_py = alt
         else:
             raise FileNotFoundError("main.py not found; expected under antislop-vllm/")
@@ -220,7 +228,8 @@ def run_generation_script(
     # -------- build CLI ----------------------------------------------------
     cmd = [
         sys.executable, main_py.name,
-        "--api-base-url", f"http://localhost:{VLLM_PORT}/v1",
+        "--api-base-url", API_BASE_URL,
+        "--api-key",           API_KEY,
         "--output-jsonl",      rel(output_jsonl_path),
         "--input-hf-dataset",  HF_DATASET_NAME,
         "--hf-dataset-split",  HF_DATASET_SPLIT,
@@ -245,7 +254,6 @@ def run_generation_script(
     print(" ".join(cmd)); print("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n")
     subprocess.run(cmd, check=True, cwd=workdir)
     print(f"✅  main.py finished — output saved to {output_jsonl_path}")
-
 
 
 
@@ -1202,13 +1210,14 @@ def antislop_pipeline() -> None:
     print(f"\n🏁 Pipeline finished. Total duration: {pipeline_duration}")
 
 
+
 if __name__ == "__main__":
     # Check if main.py exists (using the path logic from run_generation_script)
     try:
-        main_py_script_path = Path.cwd() / "main.py"
+        main_py_script_path = Path.cwd() / "antislop-vllm" / "main.py"
         if not main_py_script_path.exists():
              main_py_script_path_alt = Path.cwd() / "main.py"
-             if not (main_py_script_path_alt.exists()):
+             if not (Path.cwd().name == "antislop-vllm" and main_py_script_path_alt.exists()):
                 print(f"Error: main.py not found. Expected at ./antislop-vllm/main.py relative to CWD ({Path.cwd()}).")
                 print("Please ensure main.py (the generation script) is present in the antislop-vllm directory.")
                 sys.exit(1) # Exit if main.py is critical and not found
