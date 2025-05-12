@@ -56,7 +56,7 @@ def build_overrep_word_csv(texts: list[str], out_csv: Path, top_n_words_analysis
     # filter_common_words might be too aggressive here if we want to catch common slop.
     # counts = filter_common_words(counts, top_n=500) # Optional
 
-    corpus_freqs, wf_freqs, _, _ = analyze_word_rarity(counts) # Adjusted for tuple unpacking
+    corpus_freqs, wf_freqs, _, _, _ = analyze_word_rarity(counts) # Adjusted for tuple unpacking
     overrep = find_over_represented_words(corpus_freqs, wf_freqs, top_n=top_n_words_analysis)
 
     df = pd.DataFrame(overrep, columns=["word", "ratio_corpus/wordfreq", "corpus_freq", "wordfreq_freq"])
