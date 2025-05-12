@@ -22,6 +22,15 @@ suppress_stdout = contextlib.redirect_stdout(null_fh)
 suppress_stderr = contextlib.redirect_stderr(null_fh)
 # ───────────────────────────────────────────────────────────────────────
 
+# ── Mute PyTorch compile graph spam ────────────────────────────────────
+noisy_torch_loggers = [
+    "torch._functorch",                                       # covers _aot_autograd
+    "torch._inductor",
+    "torch._dynamo",
+]
+for name in noisy_torch_loggers:
+    logging.getLogger(name).setLevel(logging.ERROR)
+# ────────────────────────────────────────────────────
 
 # Global flag to check if imports were successful, set within the function
 UNSLOTH_LIBS_LOADED = False
