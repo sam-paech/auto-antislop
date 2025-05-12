@@ -61,3 +61,21 @@ def ensure_antislop_vllm_config_exists(antislop_vllm_dir: Path):
             logger.debug("antislop-vllm/config-example.yaml not found. No default config.yaml created for it.")
     else:
         logger.debug("antislop-vllm/config.yaml already exists.")
+
+
+###############################################################################
+# NLTK helpers
+###############################################################################
+CORE_NLTK_RESOURCES = [
+    ("tokenizers/punkt",       "punkt"),        # sentence + word tokeniser data
+    ("tokenizers/punkt_tab",   "punkt_tab"),    # new in NLTK 3.9+, used by PunktTokenizer
+    ("corpora/stopwords",      "stopwords"),    # obvious
+]
+
+def ensure_core_nltk_resources() -> None:
+    """
+    Download the three NLTK resources our pipeline needs *once* at start-up.
+    Safe to call multiple times – it‘s a no-op if they’re already present.
+    """
+    for resource_id, resource_name in CORE_NLTK_RESOURCES:
+        download_nltk_resource(resource_id, resource_name)

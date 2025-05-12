@@ -14,7 +14,11 @@ sys.path.insert(0, str(ROOT_DIR / "slop-forensics"))
 # unless some of its utils were to be imported by auto-antislop (not the current plan).
 
 from utils.config_loader import load_pipeline_config, merge_config_with_cli_args, DEFAULT_CONFIG
-from utils.fs_helpers import create_experiment_dir, download_nltk_resource, ensure_antislop_vllm_config_exists
+from utils.fs_helpers import (
+    create_experiment_dir,
+    ensure_antislop_vllm_config_exists,
+    ensure_core_nltk_resources,
+)
 from utils.vllm_manager import start_vllm_server, stop_vllm_server, is_vllm_server_alive
 from core.orchestration import orchestrate_pipeline
 from core.finetuning import run_dpo_finetune
@@ -93,9 +97,9 @@ def main():
 
     # --- Ensure NLTK resources ---
     # These are used by core.analysis
-    logger.info("Checking NLTK resources...")
-    download_nltk_resource('tokenizers/punkt', 'punkt')
-    download_nltk_resource('corpora/stopwords', 'stopwords')
+    # --- Ensure *all* NLTK resources are present *before* anything else ---
+    logger.info("Verifying / downloading required NLTK data …")
+    ensure_core_nltk_resources()
     
     # --- Ensure antislop-vllm config-example is copied (user convenience) ---
     antislop_vllm_dir = ROOT_DIR / "antislop-vllm"
