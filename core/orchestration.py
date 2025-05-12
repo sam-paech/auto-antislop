@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 import pandas as pd
 import nltk # For stopwords in orchestration context
-from typing import Optional
+from typing import Optional, Dict, Any, List
 
 from core.analysis import (
     build_overrep_word_csv, select_overrep_words_for_ban,
@@ -19,122 +19,169 @@ from core.dpo import create_dpo_dataset
 
 logger = logging.getLogger(__name__)
 
+def _build_generation_command(
+    main_script_path: Path,
+    config: Dict[str, Any],
+    output_jsonl_path: Path,
+    banned_ngrams_file: Optional[Path],
+    slop_phrases_file: Optional[Path],
+    regex_blocklist_file: Optional[Path]
+) -> List[str]:
+    """
+    Constructs the command list for invoking the antislop-vllm generation script.
+    Paths for file arguments are resolved to absolute paths.
+    """
+
+    def get_abs_path_str(p: Optional[Path]) -> Optional[str]:
+        """Resolves a Path object to an absolute path string, or returns None."""
+        return str(p.resolve()) if p else None
+
+    # Ensure essential API base URL is correctly determined
+    gen_api_base_url = config.get('generation_api_base_url')
+    if not gen_api_base_url:
+        # Fallback using vllm_port if generation_api_base_url is missing (should be caught by config validation ideally)
+        logger.warning(
+            "generation_api_base_url not found in config. Attempting fallback using vllm_port. "
+            "It's recommended to explicitly set 'generation_api_base_url' in the configuration."
+        )
+        vllm_port = config.get('vllm_port', 8000) # Default vLLM port if not in config
+        gen_api_base_url = f"http://127.0.0.1:{vllm_port}/v1"
+
+
+    # Mapping from config keys to CLI flags and value transformations (if any)
+    # None as value means the config key directly maps to the flag value as string.
+    # A callable as value means it will be called with config[key] to get the CLI value.
+    arg_map = {
+        "--api-base-url": lambda cfg: gen_api_base_url,
+        "--api-key": lambda cfg: cfg['generation_api_key'],
+        "--model-name": lambda cfg: cfg['generation_model_id'],
+        "--output-jsonl": lambda cfg: get_abs_path_str(output_jsonl_path),
+        "--input-hf-dataset": lambda cfg: cfg['generation_hf_dataset_name'],
+        "--hf-dataset-split": lambda cfg: cfg['generation_hf_dataset_split'],
+        "--threads": lambda cfg: str(cfg['generation_threads']),
+        "--max-prompts": lambda cfg: str(cfg['generation_max_prompts']),
+        "--logging-level": lambda cfg: cfg['generation_logging_level'],
+        "--max-new-tokens": lambda cfg: str(cfg['generation_max_new_tokens']),
+        "--chunk-size": lambda cfg: str(cfg['generation_param_chunk_size']),
+        "--top-logprobs-count": lambda cfg: str(cfg['generation_param_top_logprobs_count']),
+        "--temperature": lambda cfg: str(cfg['generation_param_temperature']),
+        "--top-p": lambda cfg: str(cfg['generation_param_top_p']),
+        "--top-k": lambda cfg: str(cfg['generation_param_top_k']),
+        "--min-p": lambda cfg: str(cfg['generation_param_min_p']),
+        "--timeout": lambda cfg: str(cfg['generation_param_timeout']),
+        "--max-retries-per-position": lambda cfg: str(cfg['generation_backtracking_max_retries_per_position']),
+        "--ngram-remove-stopwords": lambda cfg: str(cfg['generation_ngram_remove_stopwords']).lower(),
+        "--ngram-language": lambda cfg: cfg['generation_ngram_language'],
+    }
+
+    command = [sys.executable, str(main_script_path)]
+
+    for flag, value_getter in arg_map.items():
+        try:
+            value = value_getter(config)
+            if value is not None: # Ensure value is not None before adding flag and value
+                command.extend([flag, value])
+        except KeyError as e:
+            logger.warning(f"Configuration key {e} missing for CLI argument {flag}. Skipping.")
+        except Exception as e:
+            logger.error(f"Error processing argument {flag}: {e}. Skipping.")
+
+
+    # Conditional arguments
+    if config.get('generation_param_stop_sequences'):
+        stop_sequences_str = ",".join(config['generation_param_stop_sequences'])
+        if stop_sequences_str: # Add only if there are actual sequences
+            command.extend(["--stop-sequences", stop_sequences_str])
+    
+    if config.get('generation_chat_template_model_id'):
+        command.extend(["--chat-template-model-id", config['generation_chat_template_model_id']])
+
+    if banned_ngrams_file:
+        command.extend(["--ngram-banned-file", get_abs_path_str(banned_ngrams_file)])
+    
+    if slop_phrases_file:
+        command.extend(["--slop-phrases-file", get_abs_path_str(slop_phrases_file)])
+        # antislop-vllm's --top-n-slop-phrases applies to the file passed via --slop-phrases-file.
+        # Using a large number effectively means "use all phrases from the provided file".
+        command.extend(["--top-n-slop-phrases", str(999_999)]) 
+
+    if regex_blocklist_file:
+        command.extend(["--regex-blocklist-file", get_abs_path_str(regex_blocklist_file)])
+
+    return command
+
 def run_generation_script_wrapper(
     iter_idx: int,
     output_jsonl_path: Path,
-    config: dict,
-    experiment_dir: Path, # For resolving relative banlist paths
+    config: Dict[str, Any],
+    # experiment_dir is not directly used here if paths are absolute, but good for context
+    experiment_dir: Path, 
     banned_ngrams_file_path: Optional[Path] = None,
     slop_phrases_file_path: Optional[Path] = None,
     regex_blocklist_file_path: Optional[Path] = None,
 ) -> None:
-    """Invokes antislop-vllm/main.py with dynamically constructed CLI arguments."""
-
-    # Locate main.py relative to this project's root
+    """
+    Manages the execution of the antislop-vllm generation script for a given iteration.
+    """
     project_root = Path(__file__).resolve().parent.parent 
-    main_py = project_root / "antislop-vllm" / "main.py"
-    if not main_py.exists():
-        raise FileNotFoundError(f"antislop-vllm/main.py not found at {main_py}. Ensure submodule is present.")
+    main_py_script = project_root / "antislop-vllm" / "main.py"
 
-    workdir = main_py.parent # antislop-vllm directory
+    if not main_py_script.exists():
+        logger.error(f"Generation script not found: {main_py_script}")
+        raise FileNotFoundError(f"antislop-vllm/main.py not found at {main_py_script}. Ensure submodule is present and correctly placed.")
+
+    generation_script_workdir = main_py_script.parent 
+
+    cmd_list = _build_generation_command(
+        main_script_path=main_py_script,
+        config=config,
+        output_jsonl_path=output_jsonl_path,
+        banned_ngrams_file=banned_ngrams_file_path,
+        slop_phrases_file=slop_phrases_file_path,
+        regex_blocklist_file=regex_blocklist_file_path
+    )
+
+    # Log the command in a readable format
+    # Truncate long paths in the logged command for brevity
+    log_cmd_display_list = []
+    for item in cmd_list:
+        if isinstance(item, str) and ("/" in item or "\\" in item) and len(item) > 70:
+            log_cmd_display_list.append(f"...{item[-67:]}") # Show only the end of long paths
+        else:
+            log_cmd_display_list.append(str(item))
     
-    # Helper to make paths relative to antislop-vllm workdir if they are absolute
-    # or already relative to project root.
-    def rel_to_workdir(p: Optional[Path]) -> Optional[str]:
-        if p is None: return None
-        # If p is already relative and meant to be inside workdir (e.g. "banlists/file.json")
-        # and workdir is antislop-vllm, then it's fine.
-        # If p is absolute (e.g. from experiment_dir), make it relative to workdir.
-        if p.is_absolute():
-            try:
-                return os.path.relpath(p.resolve(), workdir.resolve())
-            except ValueError: # Happens if paths are on different drives (Windows)
-                return str(p.resolve()) # Pass absolute path if relpath fails
-        # If p is relative (e.g. to project root), resolve it then make relative to workdir
-        # This assumes 'p' might be like Path("results/run_xyz/banned_ngrams.json")
-        # relative_to_project_root = project_root / p
-        # return os.path.relpath(relative_to_project_root.resolve(), workdir.resolve())
-        # Simpler: assume paths passed are already absolute from experiment_dir
-        return str(p)
-    
-
-    # Ensure generation_api_base_url is present in config, falling back if necessary
-    # (though DEFAULT_CONFIG should provide it)
-    gen_api_base_url = config.get('generation_api_base_url')
-    if not gen_api_base_url:
-        # Fallback or error if not configured - DEFAULT_CONFIG should prevent this
-        logger.warning("generation_api_base_url not found in config, attempting fallback using vllm_port. "
-                       "Please configure generation_api_base_url.")
-        gen_api_base_url = f"http://127.0.0.1:{config.get('vllm_port', 8000)}/v1"
-
-
-
-    cmd = [
-        sys.executable, str(main_py),
-        "--api-base-url", gen_api_base_url,
-        "--api-key", config['generation_api_key'],
-        "--model-name", config['generation_model_id'],
-        "--output-jsonl", rel_to_workdir(output_jsonl_path),
-        "--input-hf-dataset", config['generation_hf_dataset_name'],
-        "--hf-dataset-split", config['generation_hf_dataset_split'],
-        "--threads", str(config['generation_threads']),
-        "--max-prompts", str(config['generation_max_prompts']),
-        "--logging-level", config['generation_logging_level'],
-        "--max-new-tokens", str(config['generation_max_new_tokens']),
-        # Generation params
-        "--chunk-size", str(config['generation_param_chunk_size']),
-        "--top-logprobs-count", str(config['generation_param_top_logprobs_count']),
-        "--temperature", str(config['generation_param_temperature']),
-        "--top-p", str(config['generation_param_top_p']),
-        "--top-k", str(config['generation_param_top_k']),
-        "--min-p", str(config['generation_param_min_p']),
-        "--timeout", str(config['generation_param_timeout']),
-        # Backtracking
-        "--max-retries-per-position", str(config['generation_backtracking_max_retries_per_position']),
-        # N-gram validator (file path is managed here)
-        "--ngram-remove-stopwords", str(config['generation_ngram_remove_stopwords']).lower(),
-        "--ngram-language", config['generation_ngram_language'],
-    ]
-
-    if config['generation_param_stop_sequences']:
-        cmd += ["--stop-sequences", ",".join(config['generation_param_stop_sequences'])]
-    
-    if config.get('generation_chat_template_model_id'):
-        cmd += ["--chat-template-model-id", config['generation_chat_template_model_id']]
-
-    if banned_ngrams_file_path:
-        cmd += ["--ngram-banned-file", rel_to_workdir(banned_ngrams_file_path)]
-    
-    if slop_phrases_file_path:
-        cmd += ["--slop-phrases-file", rel_to_workdir(slop_phrases_file_path)]
-        # antislop-vllm's --top-n-slop-phrases applies to its *own* config file,
-        # not the one we pass. If we pass a file, it uses all phrases in it.
-        # The notebook's TOP_N_INITIAL_SLOP_BAN is for *creating* the ban list.
-        # For now, assume antislop-vllm uses all phrases from the provided file.
-        # If antislop-vllm needs a top_n for a *passed* file, its CLI needs an update.
-        # The notebook used top_n_slop_phrase_flag = 999_999 if slop_phrase_file_for_cli else 0
-        # This implies antislop-vllm's main.py has a --top-n-slop-phrases that applies to the --slop-phrases-file.
-        # Checking antislop-vllm/main.py: yes, it has --top-n-slop-phrases.
-        cmd += ["--top-n-slop-phrases", str(999_999)] # Effectively use all from file
-
-    if regex_blocklist_file_path:
-        cmd += ["--regex-blocklist-file", rel_to_workdir(regex_blocklist_file_path)]
-
-    logger.info(f"\n┏━━ Iteration {iter_idx}: launching antislop-vllm/main.py ━━━━━━━━━━━━━┓")
-    logger.info(f"Workdir: {workdir}")
-    logger.info(f"Command: {' '.join(cmd)}")
+    logger.info(f"\n┏━━ Iteration {iter_idx}: Launching antislop-vllm/main.py ━━━━━━━━━━━━━┓")
+    logger.info(f"Working Directory: {generation_script_workdir}")
+    logger.info(f"Executing Command: {' '.join(log_cmd_display_list)}")
     logger.info("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n")
     
-    process = subprocess.run(cmd, cwd=workdir, check=False) # check=False to handle errors manually
-    
-    if process.returncode != 0:
-        logger.error(f"antislop-vllm/main.py failed with exit code {process.returncode}")
-        # stderr/stdout might be useful but can be very verbose.
-        # Consider capturing and logging them if errors are common.
-        raise RuntimeError(f"antislop-vllm/main.py execution failed for iteration {iter_idx}.")
-    
-    logger.info(f"✅ antislop-vllm/main.py finished for iteration {iter_idx} — output: {output_jsonl_path}")
+    try:
+        # Execute the generation script
+        process = subprocess.run(
+            cmd_list, 
+            cwd=generation_script_workdir, 
+            check=False, # We will check returncode manually
+        )
+        
+        logger.info(f"--- End of output from antislop-vllm/main.py (Iteration {iter_idx}) ---")
 
+        if process.returncode != 0:
+            error_message = (
+                f"antislop-vllm/main.py failed with exit code {process.returncode} for iteration {iter_idx}. "
+                f"See output above for details from the script."
+            )
+            logger.error(error_message)
+            raise RuntimeError(error_message)
+    
+        logger.info(f"✅ antislop-vllm/main.py finished successfully for iteration {iter_idx}.")
+        logger.info(f"   Output expected at: {output_jsonl_path.resolve()}")
+
+    except FileNotFoundError:
+        logger.error(f"Failed to execute generation script: {sys.executable} or {main_py_script} not found.")
+        raise
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while running generation script for iteration {iter_idx}: {e}")
+        raise
 
 def orchestrate_pipeline(config: dict, experiment_dir: Path, resume_mode: bool):
     logger.info(f"Starting anti-slop pipeline in directory: {experiment_dir}")

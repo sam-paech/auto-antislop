@@ -1,34 +1,47 @@
 import os
-import torch
+import torch # Keep torch as it might be used for GPU checks earlier if needed
 import logging
 from pathlib import Path
-from typing import Optional
+# typing.Optional can be imported at the top level if used in type hints outside the function
+from typing import Optional 
 
 logger = logging.getLogger(__name__)
 
-# Try to import Unsloth and related libraries, but make them optional
-try:
-    from unsloth import FastLanguageModel
-    from transformers import AutoTokenizer
-    from trl import DPOTrainer, DPOConfig
-    from datasets import load_dataset
-    from unsloth.chat_templates import get_chat_template
-    UNSLOTH_AVAILABLE = True
-except ImportError as e:
-    logger.warning(f"Unsloth or its dependencies not found ({e}). DPO finetuning will not be available.")
-    UNSLOTH_AVAILABLE = False
-    # Define dummy classes if needed for type hinting, or just guard calls
-    class FastLanguageModel: pass
-    class AutoTokenizer: pass
-    class DPOTrainer: pass
-    class DPOConfig: pass
-    def load_dataset(*args, **kwargs): return None
-    def get_chat_template(*args, **kwargs): return None
-
+# Global flag to check if imports were successful, set within the function
+UNSLOTH_LIBS_LOADED = False
 
 def run_dpo_finetune(config: dict, experiment_run_dir: Path):
-    if not UNSLOTH_AVAILABLE:
-        logger.error("Cannot run DPO finetuning: Unsloth library is not installed or has missing dependencies.")
+    global UNSLOTH_LIBS_LOADED # To modify the global flag
+
+    # --- Attempt to import Unsloth and related libraries only when this function is called ---
+    if not UNSLOTH_LIBS_LOADED:
+        try:
+            from unsloth import FastLanguageModel
+            from transformers import AutoTokenizer, TextStreamer # Added TextStreamer for potential inference example
+            from trl import DPOTrainer, DPOConfig
+            from datasets import load_dataset
+            from unsloth.chat_templates import get_chat_template
+            
+            # Make these available in the function's local scope for convenience
+            # Or, you can just use them directly as `unsloth.FastLanguageModel` etc.
+            # For cleaner code within the function, assigning to local variables is fine.
+            globals()['FastLanguageModel'] = FastLanguageModel
+            globals()['AutoTokenizer'] = AutoTokenizer
+            globals()['TextStreamer'] = TextStreamer
+            globals()['DPOTrainer'] = DPOTrainer
+            globals()['DPOConfig'] = DPOConfig
+            globals()['load_dataset'] = load_dataset
+            globals()['get_chat_template'] = get_chat_template
+            
+            UNSLOTH_LIBS_LOADED = True
+            logger.info("Unsloth and DPO finetuning libraries loaded successfully.")
+        except ImportError as e:
+            logger.error(f"Failed to import Unsloth or its dependencies: {e}. DPO finetuning cannot proceed.")
+            logger.error("Please ensure Unsloth, TRL, PEFT, Accelerate, BitsandBytes, Transformers, and Datasets are installed.")
+            return # Exit if essential libraries can't be loaded
+
+    if not UNSLOTH_LIBS_LOADED: # Double check, in case of other import issues
+        logger.error("Unsloth libraries are not available. Aborting DPO finetuning.")
         return
 
     logger.info("Starting DPO finetuning process...")
@@ -37,15 +50,12 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     dpo_file = experiment_run_dir / "dpo_pairs_dataset.jsonl"
     if not dpo_file.is_file():
         logger.error(f"DPO dataset not found at {dpo_file}. Run the anti-slop pipeline first to generate it.")
-        # Fallback: try to find the latest DPO dataset if current one is missing (optional)
-        # This logic was in the notebook, but for CLI, it's better to rely on the current run.
-        # If you want the "latest overall" logic, it can be re-added here.
-        logger.info("If you intended to use a DPO dataset from a different run, please specify its path directly or ensure it's in the current run directory.")
         return
 
     logger.info(f"Using DPO dataset: {dpo_file}")
     
     try:
+        # Use the globally available load_dataset (or from local scope if preferred)
         dpo_dataset_hf = load_dataset("json", data_files=str(dpo_file), split="train")
         if not dpo_dataset_hf or len(dpo_dataset_hf) == 0:
             logger.error(f"Loaded DPO dataset from {dpo_file} is empty or failed to load.")
@@ -76,10 +86,9 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             model_name=model_name,
             max_seq_length=max_seq_length,
             load_in_4bit=config['finetune_load_in_4bit'],
-            # token=config.get('vllm_hf_token'), # Use if model is gated
-            dtype=torch.bfloat16 if config['finetune_load_in_4bit'] else None # Common with 4bit
+            dtype=torch.bfloat16 if config['finetune_load_in_4bit'] and torch.cuda.is_bf16_supported() else None,
         )
-        tokenizer = AutoTokenizer.from_pretrained(model_name) #, token=config.get('vllm_hf_token'))
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
     except Exception as e:
         logger.error(f"Failed to load base model '{model_name}' or tokenizer for DPO: {e}", exc_info=True)
         return
@@ -92,14 +101,13 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         bias="none",
         target_modules=config['finetune_target_modules'],
         use_gradient_checkpointing=config['finetune_gradient_checkpointing'],
-        random_state=3407, # Standard seed
+        random_state=3407,
         max_seq_length=max_seq_length,
     )
 
     tokenizer = get_chat_template(
         tokenizer,
         chat_template=config['finetune_chat_template'],
-        # map_eos_token=True, # Usually handled by get_chat_template or model's default
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -110,9 +118,20 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     finetune_output_dir = experiment_run_dir / f"finetuned_model{config['finetune_output_dir_suffix']}"
     finetune_output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Determine bf16/fp16 flags based on config and capabilities
+    use_bf16 = False
+    use_fp16 = False
+    if config['finetune_load_in_4bit']: # Often implies bfloat16 if supported
+        if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+            use_bf16 = True
+            logger.info("Using bfloat16 for DPO training (4-bit model and bfloat16 supported).")
+        # else: fp16 might be an option if not 4-bit, but 4-bit usually goes with bf16 or no explicit fp16/bf16
+    # else if not 4-bit, user could specify fp16 in config if desired.
+    # For simplicity, this example prioritizes bf16 with 4-bit.
+
     dpo_trainer = DPOTrainer(
         model=model,
-        ref_model=None, # Unsloth handles this for LoRA
+        ref_model=None,
         train_dataset=dpo_dataset_hf,
         tokenizer=tokenizer,
         args=DPOConfig(
@@ -122,20 +141,20 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             num_train_epochs=config['finetune_num_epochs'],
             learning_rate=config['finetune_learning_rate'],
             logging_steps=10,
-            optim="adamw_8bit", # Unsloth optimized
+            optim="adamw_8bit",
             seed=42,
             output_dir=str(finetune_output_dir),
             max_length=max_seq_length,
             max_prompt_length=max_seq_length // 2,
             beta=config['finetune_beta'],
-            report_to="none", # "wandb", "tensorboard"
+            report_to="tensorboard", # Changed to tensorboard for local runs
             lr_scheduler_type="linear",
-            # bf16=True if config['finetune_load_in_4bit'] else False, # Enable if dtype was bfloat16
-            # fp16=False, # Mutually exclusive with bf16
+            bf16=use_bf16,
+            fp16=use_fp16, # Ensure only one is true or both false
         ),
     )
 
-    logger.info(f"Starting DPO training. Output will be in {finetune_output_dir}")
+    logger.info(f"Starting DPO training. Output will be in {finetune_output_dir}. Check tensorboard for progress.")
     try:
         trainer_stats = dpo_trainer.train()
         logger.info("DPO training finished.")
@@ -145,11 +164,11 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         logger.error(f"Error during DPO training: {e}", exc_info=True)
         return
 
-
     # --- Saving Model ---
+    # (Saving logic remains the same)
     try:
         lora_save_path = finetune_output_dir / "lora_adapters"
-        dpo_trainer.save_model(str(lora_save_path)) # Saves LoRA adapters
+        dpo_trainer.save_model(str(lora_save_path)) 
         tokenizer.save_pretrained(str(lora_save_path))
         logger.info(f"DPO LoRA adapters and tokenizer saved to {lora_save_path}")
 
@@ -160,7 +179,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             logger.info(f"Merged 16-bit DPO model saved to {merged_path}")
 
         if config.get('finetune_save_gguf_q8_0'):
-            gguf_path = finetune_output_dir / "gguf_q8_0" # Unsloth adds .gguf
+            gguf_path = finetune_output_dir / "gguf_q8_0" 
             logger.info(f"Saving GGUF Q8_0 model to {gguf_path}.gguf ...")
             model.save_pretrained_gguf(str(gguf_path), tokenizer, quantization_method="q8_0")
             logger.info(f"GGUF Q8_0 DPO model saved to {gguf_path}.gguf")
