@@ -160,30 +160,31 @@ def main():
 
     # --- DPO Finetuning (Optional) ---
     should_run_finetune = config.get('finetune_enabled_by_default', False)
-    if args.run_finetune is not None: # CLI overrides config default
+    if args.run_finetune is not None:
         should_run_finetune = args.run_finetune
 
     if should_run_finetune:
-        if experiment_run_dir: # Ensure pipeline ran and dir exists
+        if experiment_run_dir:
+            # NEW: shut down vLLM so the GPU is free for training
+            if should_manage_vllm and vllm_server_proc:
+                logger.info("Stopping managed vLLM server before DPO finetuning.")
+                stop_vllm_server(vllm_server_proc)
+                vllm_server_proc = None          # prevent a second stop later
+
             logger.info("Proceeding to DPO finetuning.")
             finetune_start_time = datetime.datetime.now()
             try:
                 run_dpo_finetune(config, experiment_run_dir)
             except Exception as e:
-                logger.error(f"An error occurred during DPO finetuning: {e}", exc_info=True)
+                logger.error("An error occurred during DPO finetuning: %s", e, exc_info=True)
             finally:
                 finetune_duration = datetime.datetime.now() - finetune_start_time
-                logger.info(f"Total DPO finetuning duration: {finetune_duration}")
+                logger.info("Total DPO finetuning duration: %s", finetune_duration)
         else:
             logger.warning("Skipping DPO finetuning as the main pipeline did not complete successfully or experiment directory is not set.")
     else:
         logger.info("DPO finetuning is disabled by config/CLI or due to pipeline issues.")
 
-    # --- Stop vLLM Server (if managed) ---
-    if should_manage_vllm and vllm_server_proc:
-        stop_vllm_server(vllm_server_proc)
-
-    logger.info("Auto-Antislop script finished.")
 
 if __name__ == "__main__":
     main()

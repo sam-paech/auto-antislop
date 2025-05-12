@@ -5,7 +5,7 @@ experiment_base_dir: "results/auto_antislop_runs" # Base for timestamped run dir
 human_profile_path: "data/human_writing_profile.json"
 
 # --- vLLM Server Management (if --manage-vllm is True) ---
-manage_vllm: false
+manage_vllm: true
 vllm_model_id: "unsloth/gemma-3-1b-it" # Model served by vLLM
 vllm_port: 8000
 vllm_hf_token: null # Optional: Your Hugging Face token if model is gated
@@ -23,8 +23,8 @@ num_iterations: 2 # Min 2: 1 for baseline, 1+ for unslopping
 # --- Generation Script (antislop-vllm/main.py) Parameters ---
 # These will be passed as CLI arguments to antislop-vllm/main.py
 #generation_api_base_url: "http://localhost:8000/v1"
-generation_api_base_url: "https://kn7r3uwcgid4xp-8888.proxy.runpod.net/v1"
-generation_model_id: "unsloth/gemma-3-4b-it" # Model name for generation requests
+#generation_api_base_url: "https://kn7r3uwcgid4xp-8888.proxy.runpod.net/v1"
+generation_model_id: "unsloth/gemma-3-1b-it" # Model name for generation requests
 generation_api_key: "xxx" # API key for the vLLM server
 generation_max_new_tokens: 2000
 generation_threads: 60 # Number of parallel threads for API queries in antislop-vllm
@@ -109,7 +109,7 @@ freq_norm_denom_for_analysis: 100000 # For normalizing frequencies
 top_n_repetition_stat: 50 # N-grams from each category to track for repetition stats
 
 # --- DPO Finetuning (Optional, controlled by --run-finetune flag) ---
-finetune_enabled_by_default: false # Can be overridden by --run-finetune
+finetune_enabled_by_default: true # Can be overridden by --run-finetune
 finetune_base_model_id: "unsloth/gemma-3-1b-it" # Base model for DPO
 finetune_max_seq_length: 2048
 finetune_load_in_4bit: true
