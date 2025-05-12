@@ -52,155 +52,105 @@ def build_overrep_word_csv(
     out_csv: Path,
     top_n_words_analysis: int,
     stop_words_set: set,
+    log_file: Path | None = None,
 ) -> Tuple[pd.DataFrame, List[str], List[str]]:
     """
-    Build a CSV of over-represented words in *texts* and return
-    (DataFrame, top_dict_words, top_nondict_words).
+    Create a CSV detailing over-represented words in *texts* and return
+    (DataFrame, top_dictionary_words, top_non_dictionary_words).
 
-    Extra DEBUG-level statements let you trace exactly where things
-    might short-circuit.  To capture them, configure the root logger
-    (or this module’s logger) to at least DEBUG and give it a FileHandler.
-
-    Example setup – place once, e.g. in main():
-    >>> logging.basicConfig(
-    ...     filename="pipeline_debug.log",
-    ...     level=logging.DEBUG,
-    ...     format="%(asctime)s  %(levelname)8s  %(name)s:  %(message)s")
-
-    Parameters
-    ----------
-    texts
-        Raw generations to analyse.
-    out_csv
-        Destination for the CSV summary.
-    top_n_words_analysis
-        How many candidate words to keep from `find_over_represented_words`.
-    stop_words_set
-        NLTK stop-word list (already loaded by caller).
-
-    Returns
-    -------
-    df : pd.DataFrame
-        Full over-rep table.
-    dict_words : list[str]
-        Dictionary words, sorted by `modulated_score` descending.
-    nodict_words : list[str]
-        Non-dictionary words (wordfreq == 0), original order.
+    All progress is written to *log_file* (default:
+    ``out_csv.with_suffix('.log')``) at DEBUG level.
     """
-    logger.debug(">> build_overrep_word_csv()  –  %d input texts", len(texts))
+    # ------------------------------------------------------------ logging set-up
+    if log_file is None:
+        log_file = out_csv.with_suffix(".log")
+    if not any(isinstance(h, logging.FileHandler) and h.baseFilename == str(log_file)
+               for h in logger.handlers):
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        file_handler.setFormatter(logging.Formatter(
+            "%(asctime)s  %(levelname)8s  %(name)s:  %(message)s"))
+        file_handler.setLevel(logging.DEBUG)
+        logger.addHandler(file_handler)
+        logger.setLevel(logging.DEBUG)
+
+    logger.debug("build_overrep_word_csv()  –  %d input texts", len(texts))
 
     if not texts:
         logger.warning("No texts supplied; skipping over-rep analysis.")
-        empty = pd.DataFrame(columns=["word",
-                                      "ratio_corpus/wordfreq",
-                                      "corpus_freq",
-                                      "wordfreq_freq",
-                                      "modulated_score"])
+        empty = pd.DataFrame(columns=[
+            "word", "ratio_corpus/wordfreq",
+            "corpus_freq", "wordfreq_freq",
+            "modulated_score",
+        ])
         return empty, [], []
 
-    # ------------------------------------------------------------------ #
-    # 1.  Raw word counts (after our normalisation pipeline)             #
-    # ------------------------------------------------------------------ #
+    # ----------------------------------------------------- word-count pipeline
     counts = get_word_counts(
-        texts,
-        normalize_func=local_normalize_text,
-        extract_func=local_extract_words,
+        texts, normalize_func=local_normalize_text, extract_func=local_extract_words
     )
-    logger.debug("Initial vocabulary size: %d unique tokens", len(counts))
-
+    logger.debug("initial vocab size: %d", len(counts))
     counts = filter_mostly_numeric(counts)
-    logger.debug("After numeric filter:     %d", len(counts))
-
+    logger.debug("after numeric filter: %d", len(counts))
     counts = merge_plural_possessive_s(counts)
-    logger.debug("After possessive merge:   %d", len(counts))
-
+    logger.debug("after possessive merge: %d", len(counts))
     counts = filter_stopwords(counts, stop_words_set=stop_words_set)
-    logger.debug("After stop-word filter:   %d", len(counts))
+    logger.debug("after stop-word filter: %d", len(counts))
 
-    # ------------------------------------------------------------------ #
-    # 2.  Corpus / wordfreq rarity metrics                               #
-    # ------------------------------------------------------------------ #
-    try:
-        corpus_freqs, wf_freqs, avg_corpus_rarity, avg_wf_rarity, corr = (
-            analyze_word_rarity(counts)
-        )
-        logger.debug("analyse_word_rarity(): corpus=%d  wf=%d  "
-                     "avg_corpus_rarity=%.3f  avg_wf_rarity=%.3f  corr=%.3f",
-                     len(corpus_freqs), len(wf_freqs),
-                     avg_corpus_rarity, avg_wf_rarity, corr)
-    except Exception as exc:
-        logger.exception("analyse_word_rarity() raised – aborting over-rep build")
-        raise
+    # ------------------------------------------------ corpus / wordfreq rarity
+    corpus_freqs, wf_freqs, *_ = analyze_word_rarity(counts)
+    logger.debug("analyse_word_rarity(): corpus=%d  wf=%d",
+                 len(corpus_freqs), len(wf_freqs))
 
-    # ------------------------------------------------------------------ #
-    # 3.  Over-representation scores                                     #
-    # ------------------------------------------------------------------ #
+    # ------------------------------------------------ over-representation score
     overrep = find_over_represented_words(
-        corpus_freqs,
-        wf_freqs,
-        top_n=top_n_words_analysis,
+        corpus_freqs, wf_freqs, top_n=top_n_words_analysis
     )
-    logger.debug("find_over_represented_words() returned %d rows", len(overrep))
+    logger.debug("find_over_represented_words() → %d rows", len(overrep))
 
     if not overrep:
         logger.warning("Over-rep list empty – writing empty CSV and returning.")
-        df_empty = pd.DataFrame(columns=["word",
-                                         "ratio_corpus/wordfreq",
-                                         "corpus_freq",
-                                         "wordfreq_freq",
-                                         "modulated_score"])
+        df_empty = pd.DataFrame(columns=[
+            "word", "ratio_corpus/wordfreq",
+            "corpus_freq", "wordfreq_freq",
+            "modulated_score",
+        ])
         df_empty.to_csv(out_csv, index=False)
         return df_empty, [], []
 
-    # ------------------------------------------------------------------ #
-    # 4.  DataFrame + modulated score                                    #
-    # ------------------------------------------------------------------ #
+    # ------------------------------------------------ dataframe construction
     df = pd.DataFrame(
         overrep,
-        columns=["word",
-                 "ratio_corpus/wordfreq",
-                 "corpus_freq",
-                 "wordfreq_freq"],
+        columns=["word", "ratio_corpus/wordfreq", "corpus_freq", "wordfreq_freq"],
     )
     for col in ("ratio_corpus/wordfreq", "corpus_freq", "wordfreq_freq"):
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
     dict_mask = df["wordfreq_freq"] > 0
     if dict_mask.any():
-        df_dict = df.loc[dict_mask].copy()
-        boost  = df_dict["corpus_freq"].pow(BOOST_EXPONENT)
-        atten  = df_dict["wordfreq_freq"].pow(ATTEN_EXPONENT).replace(0, 1)
+        df_dict = df.loc[dict_mask]
+        boost = df_dict["corpus_freq"].pow(BOOST_EXPONENT)
+        atten = df_dict["wordfreq_freq"].pow(ATTEN_EXPONENT).replace(0, 1)
         df.loc[dict_mask, "modulated_score"] = (
             df_dict["ratio_corpus/wordfreq"] * boost / atten
         )
-        logger.debug("Computed modulated_score for %d dictionary words",
-                     dict_mask.sum())
+        logger.debug("computed modulated_score for %d dictionary words", dict_mask.sum())
     else:
-        logger.debug("No dictionary words in over-rep list – skipping modulated_score")
+        logger.debug("no dictionary words in over-rep list")
 
-    # ------------------------------------------------------------------ #
-    # 5.  Persist CSV                                                    #
-    # ------------------------------------------------------------------ #
-    try:
-        df.to_csv(out_csv, index=False)
-        logger.info("🔎  over-rep word CSV → %s  (%d rows)",
-                    out_csv, len(df))
-    except Exception as exc:
-        logger.exception("Failed to write %s", out_csv)
-        raise
+    # ------------------------------------------------ write CSV
+    df.to_csv(out_csv, index=False)
+    logger.info("over-rep word CSV → %s  (%d rows)", out_csv, len(df))
 
-    # ------------------------------------------------------------------ #
-    # 6.  Return lists for downstream banning                            #
-    # ------------------------------------------------------------------ #
+    # ------------------------------------------------ lists for ban pipeline
     dict_words_df = df.loc[dict_mask]
     dict_words = (
-        dict_words_df.sort_values("modulated_score", ascending=False)["word"].tolist()
-        if not dict_words_df.empty and "modulated_score" in dict_words_df.columns
-        else []
+        dict_words_df
+        .sort_values("modulated_score", ascending=False)["word"]
+        .tolist() if not dict_words_df.empty else []
     )
     nodict_words = df.loc[~dict_mask, "word"].tolist()
 
-    logger.debug("Returning %d dict words    %d non-dict words",
+    logger.debug("returning %d dictionary words, %d non-dictionary words",
                  len(dict_words), len(nodict_words))
     return df, dict_words, nodict_words
 
