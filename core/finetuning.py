@@ -22,31 +22,48 @@ suppress_stdout = contextlib.redirect_stdout(null_fh)
 suppress_stderr = contextlib.redirect_stderr(null_fh)
 # ───────────────────────────────────────────────────────────────────────
 
-# ---------------------------------------------------------------------
-#  Quiet every torch-compile / dynamo / inductor logger *except*
-#  the one that prints progress bars & loss.
-#  (put this just after you quietened Unsloth’s own logger,
-#   e.g. near the top of core/finetuning.py)
-# ---------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────
+#  1. Quiet 🤗 Datasets (the D2 / T4 object-dumps)
+# ─────────────────────────────────────────────────────────────
+try:
+    # Must be done **before** the first `datasets` import
+    import datasets.utils.logging as hf_datasets_logging
+    hf_datasets_logging.set_verbosity_error()  # or WARNING if you still want HF progress bars
+except ModuleNotFoundError:
+    pass  # datasets not installed yet – fine
+
+# Belt-and-braces: silence its individual loggers too
+for name in (
+    "datasets",               # umbrella
+    "datasets.arrow_dataset", # the shard concatenation prints
+):
+    l = logging.getLogger(name)
+    l.setLevel(logging.ERROR)
+    l.propagate = False
+
+# ─────────────────────────────────────────────────────────────
+#  2. Silence *all* remaining torch.compile / dynamo spam
+# ─────────────────────────────────────────────────────────────
 _noisy_torch_loggers = [
-    # already muted earlier, but keep for completeness
+    # earlier ones
     "torch._functorch",
     "torch._functorch._aot_autograd",
     "torch._functorch._aot_autograd.jit_compile_runtime_wrappers",
     "torch._inductor",
     "torch._dynamo",
 
-    # NEW – the spam you’re still seeing
+    # new offenders
+    "torch._functorch._aot_autograd.dispatch_and_compile_graph",
+    "torch.fx",
+    "torch.fx.experimental",
     "torch.fx.experimental.symbolic_shapes",
     "torch._utils_internal",
-    # you can add more branches here if you spot new chatter
 ]
 
 for name in _noisy_torch_loggers:
-    logger = logging.getLogger(name)
-    logger.setLevel(logging.ERROR)     # or logging.WARNING if you want an occasional heads-up
-    logger.propagate = False           # <- critical: stops bubbling to the root logger
-# ----
+    lg = logging.getLogger(name)
+    lg.setLevel(logging.ERROR)
+    lg.propagate = False  # critical – stops bubbling up to the root logger
 
 # Global flag to check if imports were successful, set within the function
 UNSLOTH_LIBS_LOADED = False
