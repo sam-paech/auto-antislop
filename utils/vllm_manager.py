@@ -44,7 +44,9 @@ def start_vllm_server(
     max_model_len: int,
     dtype: str,
     vllm_extra_args: Optional[List[str]] = None,
-    wait_timeout: int = 180 # Increased timeout for model loading
+    wait_timeout: int = 720,
+    log_level: str = "WARNING",
+    quiet_stdout: bool = True,
 ) -> Optional[subprocess.Popen]:
     """Starts the vLLM API server."""
     if is_vllm_server_alive(port):
@@ -59,7 +61,8 @@ def start_vllm_server(
         "--gpu-memory-utilization", str(gpu_memory_utilization),
         "--max-model-len", str(max_model_len),
         "--dtype", dtype,
-        "--disable-log-requests" # Often good for cleaner logs during generation
+        "--disable-log-requests", # Often good for cleaner logs during generation
+        "--log-level", log_level.upper(),
     ]
     if hf_token:
         cmd.extend(["--hf-token", hf_token])
@@ -75,7 +78,12 @@ def start_vllm_server(
     try:
         # Start process without piping stdout/stderr to Popen directly for cleaner notebook/CLI output
         # The vLLM server logs to console by default.
-        server_proc = subprocess.Popen(cmd, env=env) # Removed stdout, stderr pipes
+        server_proc = subprocess.Popen(
+            cmd,
+            env=env,
+            stdout=subprocess.DEVNULL if quiet_stdout else None,
+            stderr=subprocess.STDOUT if quiet_stdout else None,
+        )
     except FileNotFoundError:
         logger.error("vLLM not found. Please ensure vLLM is installed and in your PATH (e.g., `pip install vllm`).")
         return None

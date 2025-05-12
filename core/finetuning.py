@@ -7,6 +7,22 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# ── QUIET-MODE FOR DATASETS / TRANSFORMERS ────────────────────────────
+import datasets, transformers, warnings, contextlib, io, os
+# kill progress bars & debug prints
+os.environ["HF_DATASETS_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+datasets.utils.logging.set_verbosity_error()
+transformers.utils.logging.set_verbosity_error()
+logging.getLogger("datasets").setLevel(logging.ERROR)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+# route any stray `print` that slips through to /dev/null during finetune
+null_fh = open(os.devnull, "w")
+suppress_stdout = contextlib.redirect_stdout(null_fh)
+suppress_stderr = contextlib.redirect_stderr(null_fh)
+# ───────────────────────────────────────────────────────────────────────
+
+
 # Global flag to check if imports were successful, set within the function
 UNSLOTH_LIBS_LOADED = False
 
