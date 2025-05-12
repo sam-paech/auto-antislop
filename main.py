@@ -5,10 +5,17 @@ import os
 from pathlib import Path
 import datetime # For pipeline duration
 
+# ── make utils importable ────────────────────────────────────────────
+ROOT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT_DIR))          # so "utils" is on sys.path
+
+# ── guarantee NLTK data is present *before* any other project import ─
+from utils.fs_helpers import ensure_core_nltk_resources
+ensure_core_nltk_resources()               # downloads punkt, punkt_tab, stopwords
+
+
 # --- Add project directories to sys.path ---
 # This allows importing from core, utils, and submodules
-ROOT_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT_DIR)) # For core and utils
 sys.path.insert(0, str(ROOT_DIR / "slop-forensics"))
 # antislop-vllm is called as a script, its path for direct import is not strictly needed
 # unless some of its utils were to be imported by auto-antislop (not the current plan).
@@ -16,8 +23,7 @@ sys.path.insert(0, str(ROOT_DIR / "slop-forensics"))
 from utils.config_loader import load_pipeline_config, merge_config_with_cli_args, DEFAULT_CONFIG
 from utils.fs_helpers import (
     create_experiment_dir,
-    ensure_antislop_vllm_config_exists,
-    ensure_core_nltk_resources,
+    ensure_antislop_vllm_config_exists
 )
 from utils.vllm_manager import start_vllm_server, stop_vllm_server, is_vllm_server_alive
 from core.orchestration import orchestrate_pipeline
