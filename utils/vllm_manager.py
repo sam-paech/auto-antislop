@@ -45,7 +45,7 @@ def start_vllm_server(
     dtype: str,
     vllm_extra_args: Optional[List[str]] = None,
     wait_timeout: int = 720,
-    log_level: str = "WARNING",
+    uvicorn_log_level: str = "error",
     quiet_stdout: bool = True,
 ) -> Optional[subprocess.Popen]:
     """Starts the vLLM API server."""
@@ -62,7 +62,7 @@ def start_vllm_server(
         "--max-model-len", str(max_model_len),
         "--dtype", dtype,
         "--disable-log-requests", # Often good for cleaner logs during generation
-        "--log-level", log_level.upper(),
+        "--uvicorn-log-level", uvicorn_log_level.lower(),
     ]
     if hf_token:
         cmd.extend(["--hf-token", hf_token])

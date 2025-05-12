@@ -121,7 +121,7 @@ def main():
                 max_model_len=config['vllm_max_model_len'],
                 dtype=config['vllm_dtype'],
                 vllm_extra_args=config.get('vllm_extra_args'),
-                log_level="ERROR",          # <-- cut vllm chatter
+                uvicorn_log_level="error",          # <-- cut vllm chatter
                 quiet_stdout=True,          # <-- discard server stream
             )
             if vllm_server_proc is None: # Failed to start
