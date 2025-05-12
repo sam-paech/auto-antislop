@@ -76,11 +76,8 @@ def build_overrep_word_csv(
 
         counts = filter_mostly_numeric(counts)
         counts = merge_plural_possessive_s(counts)
+        counts = filter_stopwords(counts)
 
-        if stop_words_set is None:
-            counts = filter_stopwords(counts)
-        else:
-            counts = filter_stopwords(counts, stop_words_set=stop_words_set)
         _log(f"after filters: {len(counts)} types")
 
         # ---------- rarity + over-rep score ---------------------------------
