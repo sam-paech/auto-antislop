@@ -15,18 +15,17 @@ wordfreq>=3.0
 
 
 # For DPO Finetuning (Unsloth and its dependencies)
-# These are often installed with specific CUDA versions in mind.
-# User might need to install these manually based on their environment.
-# unsloth[colab-new] # Or appropriate unsloth variant
-# bitsandbytes
-# accelerate
-# peft
-# trl
-# transformers
-# datasets
-# sentencepiece
-# protobuf
-# hf_transfer
+unsloth
+bitsandbytes
+accelerate
+peft
+trl
+transformers
+datasets
+sentencepiece
+protobuf
+hf_transfer
+tensorboard
 
 
 
