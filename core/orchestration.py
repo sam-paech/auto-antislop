@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 import pandas as pd
 from typing import Optional, Dict, Any, List
+import traceback
 
 from core.analysis import (
     build_overrep_word_csv, select_overrep_words_for_ban,
@@ -423,46 +424,70 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
 
             # --- Update Ban Lists (based on current iteration's analysis) ---
             # These lists will be used by the *next* iteration's generation step.
+            # --- Update ban lists (based on current iteration's analysis) --------------
             overrep_tokens_for_ban: list[str] = []
+            iter_log = iter_analysis_dir / "orchestration.log"
+            def _iter_log(msg: str) -> None:
+                with iter_log.open("a", encoding="utf-8") as fh:
+                    fh.write(f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S}  {msg}\n")
+
+            # (a) over-represented words -------------------------------------------------
             if config['compute_overrep_words']:
                 try:
                     overrep_csv = iter_analysis_dir / "overrepresented_words.csv"
                     _, dict_words, nodict_words = build_overrep_word_csv(
-                        texts=generated_texts, out_csv=overrep_csv,
+                        texts=generated_texts,
+                        out_csv=overrep_csv,
                         top_n_words_analysis=config['top_k_words_for_overrep_analysis'],
-                        stop_words_set=stop_words_set
+                        stop_words_set=stop_words_set,
                     )
                     overrep_tokens_for_ban = select_overrep_words_for_ban(
                         dict_words, nodict_words, (iter_idx == 0), config
                     )
-                except Exception as e:
-                    logger.error(f"❌ Error computing over-represented words for iteration {iter_idx}: {e}", exc_info=True)
+                    _iter_log(f"overrep_tokens_for_ban = {len(overrep_tokens_for_ban)}")
+                except Exception as exc:
+                    _iter_log("❌ build_overrep_word_csv failed:\n" +
+                            "".join(traceback.format_exception_only(type(exc), exc)))
 
+            # (b) n-gram ban list --------------------------------------------------------
             if config['enable_ngram_ban']:
                 try:
-                    # update_banned_ngrams_list appends to the existing file or creates it.
-                    # It uses is_first_iteration=(iter_idx == 0) to apply different quotas.
                     update_banned_ngrams_list(
                         banned_ngrams_json_path,
                         dfs=[df_bi_dict, df_bi_nondct, df_tri_dict, df_tri_nondct],
-                        is_first_iteration=(iter_idx == 0), config=config
+                        is_first_iteration=(iter_idx == 0),
+                        config=config,
                     )
-                except Exception as e:
-                    logger.error(f"❌ Error updating N-gram ban list for iteration {iter_idx}: {e}", exc_info=True)
+                    _iter_log("n-gram ban list updated")
+                except Exception as exc:
+                    _iter_log("❌ update_banned_ngrams_list failed:\n" +
+                            "".join(traceback.format_exception_only(type(exc), exc)))
 
+            # (c) slop-phrase ban list ---------------------------------------------------
             if config['enable_slop_phrase_ban']:
                 try:
-                    phrases_to_add_count = config['top_n_initial_slop_ban'] if iter_idx == 0 else config['top_n_subsequent_slop_ban']
-                    # update_banned_slop_phrases also appends or creates.
-                    update_banned_slop_phrases(
-                        json_path=banned_slop_phrases_json_path, texts=generated_texts,
-                        how_many_new=phrases_to_add_count, tmp_dir=iter_analysis_dir / "phrase_tmp",
-                        config=config,
-                        over_represented_words=overrep_tokens_for_ban if config['ban_overrep_words_in_phrase_list'] else None
+                    phrases_to_add_count = (
+                        config['top_n_initial_slop_ban'] if iter_idx == 0
+                        else config['top_n_subsequent_slop_ban']
                     )
-                except Exception as e:
-                    logger.error(f"❌ Error updating slop phrase ban list for iteration {iter_idx}: {e}", exc_info=True)
-            
+                    update_banned_slop_phrases(
+                        json_path=banned_slop_phrases_json_path,
+                        texts=generated_texts,
+                        how_many_new=phrases_to_add_count,
+                        tmp_dir=iter_analysis_dir / "phrase_tmp",
+                        config=config,
+                        over_represented_words=(
+                            overrep_tokens_for_ban if
+                            config['ban_overrep_words_in_phrase_list'] else None
+                        ),
+                    )
+                    _iter_log("slop-phrase ban list updated  "
+                            f"(+{len(overrep_tokens_for_ban)} over-rep words)")
+                except Exception as exc:
+                    _iter_log("❌ update_banned_slop_phrases failed:\n" +
+                            "".join(traceback.format_exception_only(type(exc), exc)))
+
+
             # --- Calculate Metrics for this iteration ---
             ttr, rttr, repetition_norm = 0.0, 0.0, 0.0
             try:

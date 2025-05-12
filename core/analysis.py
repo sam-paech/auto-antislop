@@ -52,87 +52,86 @@ def build_overrep_word_csv(
     texts: List[str],
     out_csv: Path,
     top_n_words_analysis: int,
-    stop_words_set: Optional[set] = None,   # ← keeps the caller happy
+    stop_words_set: Optional[set] = None,   # keeps the caller happy
 ) -> Tuple[pd.DataFrame, List[str], List[str]]:
     """
-    Notebook-faithful implementation that also accepts *stop_words_set* so the
+    Notebook-faithful implementation that ALSO accepts *stop_words_set* so the
     CLI call `build_overrep_word_csv(..., stop_words_set=…)` keeps working.
     Returns (df, dict_words, nodict_words).
     """
-    # ---- logging -----------------------------------------------------------
+    # ------------------------------------------------- plain-file logging ---
     log_path = out_csv.with_suffix(".log")
-    if not any(isinstance(h, logging.FileHandler) and h.baseFilename == str(log_path)
-               for h in logger.handlers):
-        fh = logging.FileHandler(log_path, encoding="utf-8")
-        fh.setFormatter(logging.Formatter(
-            "%(asctime)s  %(levelname)8s  %(name)s: %(message)s"))
-        fh.setLevel(logging.DEBUG)
-        logger.addHandler(fh)
-    logger.setLevel(logging.DEBUG)
 
-    logger.debug("build_overrep_word_csv: %d input texts", len(texts))
+    def _log(msg: str) -> None:
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S}  {msg}\n")
 
-    # ---------- flatten + count (identical to notebook) ---------------------
-    counts = get_word_counts(texts)  # ← ***no extra kwargs***
+    import datetime, traceback
+    _log(f"build_overrep_word_csv ▶  {len(texts)} input texts")
 
-    counts = filter_mostly_numeric(counts)
-    counts = merge_plural_possessive_s(counts)
+    try:
+        # ---------- flatten + count (identical to the notebook) -------------
+        counts = get_word_counts(texts)          # ← **no extra kwargs**
+        _log(f"after get_word_counts: {len(counts)} types")
 
-    # keep the caller’s custom stop-word list if provided
-    if stop_words_set is None:
-        counts = filter_stopwords(counts)
-    else:
-        counts = filter_stopwords(counts, stop_words_set=stop_words_set)
+        counts = filter_mostly_numeric(counts)
+        counts = merge_plural_possessive_s(counts)
 
-    # ---------- rarity + over-rep score -------------------------------------
-    corpus_freqs, wf_freqs, *_ = analyze_word_rarity(counts)
-    overrep = find_over_represented_words(
-        corpus_freqs, wf_freqs, top_n=top_n_words_analysis
-    )
+        if stop_words_set is None:
+            counts = filter_stopwords(counts)
+        else:
+            counts = filter_stopwords(counts, stop_words_set=stop_words_set)
+        _log(f"after filters: {len(counts)} types")
 
-    # ---------- DataFrame ---------------------------------------------------
-    df = pd.DataFrame(
-        overrep,
-        columns=[
-            "word",
-            "ratio_corpus/wordfreq",
-            "corpus_freq",
-            "wordfreq_freq",
-        ],
-    )
-
-    num_cols = ["ratio_corpus/wordfreq", "corpus_freq", "wordfreq_freq"]
-    df[num_cols] = df[num_cols].apply(pd.to_numeric, errors="coerce")
-
-    # ---------- modulated_score for dictionary words ------------------------
-    dict_mask = df["wordfreq_freq"] > 0
-    if dict_mask.any():
-        df_dict = df[dict_mask].copy()
-        boost = np.power(df_dict["corpus_freq"], BOOST_EXPONENT)
-        atten = np.power(df_dict["wordfreq_freq"], ATTEN_EXPONENT)
-        atten_safe = np.where(atten == 0, 1, atten)
-
-        df.loc[dict_mask, "modulated_score"] = (
-            df_dict["ratio_corpus/wordfreq"] * boost / atten_safe
+        # ---------- rarity + over-rep score ---------------------------------
+        corpus_freqs, wf_freqs, *_ = analyze_word_rarity(counts)
+        overrep = find_over_represented_words(
+            corpus_freqs, wf_freqs, top_n=top_n_words_analysis
         )
+        _log(f"find_over_represented_words → {len(overrep)} rows")
 
-    # ---------- write CSV ---------------------------------------------------
-    df.to_csv(out_csv, index=False)
-    logger.info("🔎 over-rep word CSV → %s  (%d rows)", out_csv, len(df))
+        # ---------- DataFrame ----------------------------------------------
+        df = pd.DataFrame(
+            overrep,
+            columns=[
+                "word", "ratio_corpus/wordfreq", "corpus_freq", "wordfreq_freq"
+            ],
+        )
+        num_cols = ["ratio_corpus/wordfreq", "corpus_freq", "wordfreq_freq"]
+        df[num_cols] = df[num_cols].apply(pd.to_numeric, errors="coerce")
 
-    # ---------- split & sort ------------------------------------------------
-    dict_words_df = df[dict_mask]
-    dict_words = (
-        dict_words_df.sort_values("modulated_score", ascending=False)["word"].tolist()
-        if "modulated_score" in dict_words_df.columns
-        else dict_words_df["word"].tolist()
-    )
-    nodict_words = df[~dict_mask]["word"].tolist()
+        # ---------- modulated_score for dictionary words --------------------
+        dict_mask = df["wordfreq_freq"] > 0
+        if dict_mask.any():
+            df_dict   = df[dict_mask].copy()
+            boost     = np.power(df_dict["corpus_freq"],  BOOST_EXPONENT)
+            atten     = np.power(df_dict["wordfreq_freq"], ATTEN_EXPONENT)
+            atten_safe = np.where(atten == 0, 1, atten)
+            df.loc[dict_mask, "modulated_score"] = (
+                df_dict["ratio_corpus/wordfreq"] * boost / atten_safe
+            )
 
-    logger.debug(
-        "returning %d dict words, %d non-dict words", len(dict_words), len(nodict_words)
-    )
-    return df, dict_words, nodict_words
+        # ---------- write CSV ----------------------------------------------
+        df.to_csv(out_csv, index=False)
+        _log(f"CSV written → {out_csv}  ({len(df)} rows)")
+
+        # ---------- split & sort -------------------------------------------
+        dict_words_df = df[dict_mask]
+        dict_words = (
+            dict_words_df.sort_values(
+                "modulated_score", ascending=False)["word"].tolist()
+            if "modulated_score" in dict_words_df.columns
+            else dict_words_df["word"].tolist()
+        )
+        nodict_words = df[~dict_mask]["word"].tolist()
+        _log(f"returning {len(dict_words)} dict words, {len(nodict_words)} non-dict")
+
+        return df, dict_words, nodict_words
+
+    except Exception as exc:
+        _log("ERROR:\n" + "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+        raise
+
 
 def select_overrep_words_for_ban(dict_words: list[str], nodict_words: list[str],
                                  is_first_iteration: bool, config: dict) -> list[str]:
