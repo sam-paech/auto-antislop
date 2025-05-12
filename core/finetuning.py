@@ -32,6 +32,19 @@ for name in noisy_torch_loggers:
     logging.getLogger(name).setLevel(logging.ERROR)
 # ────────────────────────────────────────────────────
 
+# ── Mute graph dumps that torch.compile prints at INFO ───────────────
+noisy_torch_tree = [
+    "torch._functorch",
+    "torch._functorch._aot_autograd",
+    "torch._functorch._aot_autograd.jit_compile_runtime_wrappers",
+]
+for ln in noisy_torch_tree:
+    lg = logging.getLogger(ln)
+    lg.setLevel(logging.ERROR)
+    lg.propagate = False          # <- stop it forwarding to root handlers
+# ──────────────────────────────────────────────────────────────────────
+
+
 # Global flag to check if imports were successful, set within the function
 UNSLOTH_LIBS_LOADED = False
 
