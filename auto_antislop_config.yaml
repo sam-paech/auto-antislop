@@ -126,5 +126,5 @@ finetune_num_epochs: 1 # Reduced for quick example, typically 1-3
 finetune_learning_rate: 0.00005 # 5e-5
 finetune_beta: 0.1 # DPO beta
 finetune_output_dir_suffix: "_dpo_finetuned" # Appended to experiment run dir
-finetune_save_merged_16bit: false
+finetune_save_merged_16bit: true
 finetune_save_gguf_q8_0: false
