@@ -22,28 +22,31 @@ suppress_stdout = contextlib.redirect_stdout(null_fh)
 suppress_stderr = contextlib.redirect_stderr(null_fh)
 # ───────────────────────────────────────────────────────────────────────
 
-# ── Mute PyTorch compile graph spam ────────────────────────────────────
-noisy_torch_loggers = [
-    "torch._functorch",                                       # covers _aot_autograd
-    "torch._inductor",
-    "torch._dynamo",
-]
-for name in noisy_torch_loggers:
-    logging.getLogger(name).setLevel(logging.ERROR)
-# ────────────────────────────────────────────────────
-
-# ── Mute graph dumps that torch.compile prints at INFO ───────────────
-noisy_torch_tree = [
+# ---------------------------------------------------------------------
+#  Quiet every torch-compile / dynamo / inductor logger *except*
+#  the one that prints progress bars & loss.
+#  (put this just after you quietened Unsloth’s own logger,
+#   e.g. near the top of core/finetuning.py)
+# ---------------------------------------------------------------------
+_noisy_torch_loggers = [
+    # already muted earlier, but keep for completeness
     "torch._functorch",
     "torch._functorch._aot_autograd",
     "torch._functorch._aot_autograd.jit_compile_runtime_wrappers",
-]
-for ln in noisy_torch_tree:
-    lg = logging.getLogger(ln)
-    lg.setLevel(logging.ERROR)
-    lg.propagate = False          # <- stop it forwarding to root handlers
-# ──────────────────────────────────────────────────────────────────────
+    "torch._inductor",
+    "torch._dynamo",
 
+    # NEW – the spam you’re still seeing
+    "torch.fx.experimental.symbolic_shapes",
+    "torch._utils_internal",
+    # you can add more branches here if you spot new chatter
+]
+
+for name in _noisy_torch_loggers:
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.ERROR)     # or logging.WARNING if you want an occasional heads-up
+    logger.propagate = False           # <- critical: stops bubbling to the root logger
+# ----
 
 # Global flag to check if imports were successful, set within the function
 UNSLOTH_LIBS_LOADED = False
