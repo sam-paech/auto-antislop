@@ -1,0 +1,35 @@
+# Core dependencies
+pyyaml>=6.0
+pandas>=1.5
+numpy>=1.20
+nltk>=3.6
+requests>=2.25
+tqdm>=4.60
+tiktoken
+wordfreq>=3.0
+
+# For vLLM (if managed by this script)
+# vllm # User should install this separately if managing vLLM manually or if specific version needed
+# torch # Or newer, compatible with vLLM and Unsloth
+
+
+
+# For DPO Finetuning (Unsloth and its dependencies)
+# These are often installed with specific CUDA versions in mind.
+# User might need to install these manually based on their environment.
+# unsloth[colab-new] # Or appropriate unsloth variant
+# bitsandbytes
+# accelerate
+# peft
+# trl
+# transformers
+# datasets
+# sentencepiece
+# protobuf
+# hf_transfer
+
+
+
+
+# Note: Users will need to ensure compatible versions of torch, CUDA, and vLLM/Unsloth
+# are installed for their specific hardware if using vLLM management or finetuning.

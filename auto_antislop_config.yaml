@@ -1,0 +1,128 @@
+# Main Auto-Antislop Configuration
+
+# --- Experiment Setup ---
+experiment_base_dir: "results/auto_antislop_runs" # Base for timestamped run directories
+human_profile_path: "data/human_writing_profile.json"
+
+# --- vLLM Server Management (if --manage-vllm is True) ---
+manage_vllm: false
+vllm_model_id: "unsloth/gemma-3-1b-it" # Model served by vLLM
+vllm_port: 8000
+vllm_hf_token: null # Optional: Your Hugging Face token if model is gated
+vllm_cuda_visible_devices: "0"
+vllm_gpu_memory_utilization: 0.90
+vllm_max_model_len: 8192
+vllm_dtype: "bfloat16"
+# Additional raw CLI arguments for vLLM server, e.g., ["--tensor-parallel-size", "2"]
+vllm_extra_args: []
+
+
+# --- Iterative Anti-Slop Pipeline ---
+num_iterations: 2 # Min 2: 1 for baseline, 1+ for unslopping
+
+# --- Generation Script (antislop-vllm/main.py) Parameters ---
+# These will be passed as CLI arguments to antislop-vllm/main.py
+generation_model_id: "unsloth/gemma-3-1b-it" # Model name for generation requests
+generation_api_key: "xxx" # API key for the vLLM server
+generation_max_new_tokens: 2000
+generation_threads: 8 # Number of parallel threads for API queries in antislop-vllm
+generation_max_prompts: 80 # Max new prompts for antislop-vllm to process from source
+generation_hf_dataset_name: 'Nitral-AI/Reddit-SFW-Writing_Prompts_ShareGPT'
+generation_hf_dataset_split: 'train'
+generation_logging_level: 'INFO' # Logging level for antislop-vllm script
+generation_chat_template_model_id: null # e.g., "mistralai/Mistral-7B-Instruct-v0.1" if using chat template for completions
+
+# Parameters for antislop-vllm's generation_params (passed as individual CLI args)
+generation_param_chunk_size: 50
+generation_param_top_logprobs_count: 20
+generation_param_temperature: 0.7
+generation_param_top_p: 1.0
+generation_param_top_k: 50
+generation_param_min_p: 0.05
+generation_param_timeout: 120
+generation_param_stop_sequences: [] # e.g., ["\n\n", "---"]
+
+# Parameters for antislop-vllm's backtracking (passed as individual CLI args)
+generation_backtracking_max_retries_per_position: 20
+
+# Parameters for antislop-vllm's ngram_validator (passed as individual CLI args)
+# N-gram ban list file is managed by auto-antislop's iterative process.
+generation_ngram_remove_stopwords: true
+generation_ngram_language: "english"
+
+
+# --- N-Gram Analysis & Banning (within auto-antislop) ---
+enable_ngram_ban: true
+top_k_bigrams: 5000
+top_k_trigrams: 5000
+# Quotas for adding n-grams to ban list per iteration
+dict_bigrams_initial: 400
+dict_bigrams_subsequent: 70
+nodict_bigrams_initial: 800
+nodict_bigrams_subsequent: 100
+dict_trigrams_initial: 300
+dict_trigrams_subsequent: 50
+nodict_trigrams_initial: 800
+nodict_trigrams_subsequent: 100
+# User-supplied extra n-grams to always ban (processed by auto-antislop)
+extra_ngrams_to_ban: [
+  # "voice barely whisper",
+]
+
+# --- Over-Represented Word Analysis & Banning (within auto-antislop) ---
+compute_overrep_words: true
+top_k_words_for_overrep_analysis: 200000
+# Quotas for adding over-represented words to slop phrase ban list
+dict_overrep_initial: 800
+dict_overrep_subsequent: 200
+nodict_overrep_initial: 80
+nodict_overrep_subsequent: 20
+
+# --- Slop Phrase Banning (within auto-antislop) ---
+enable_slop_phrase_ban: true
+ban_overrep_words_in_phrase_list: true # Add selected over-rep words to slop phrase list
+min_phrase_freq_to_keep: 2 # Min frequency for a new phrase from slop-forensics to be considered
+top_n_initial_slop_ban: 600 # New slop phrases from slop-forensics to ban in iter 0
+top_n_subsequent_slop_ban: 100 # New slop phrases from slop-forensics to ban in later iters
+# User-supplied extra slop phrases to always ban (processed by auto-antislop)
+extra_slop_phrases_to_ban: [
+  # "testament to",
+  # "…", "*", " –", "–", "#",
+]
+
+# --- Regex Banning (within auto-antislop, passed to antislop-vllm) ---
+# User-supplied regex patterns to ban
+extra_regex_patterns: [
+    # These ones ban "it's not x, it's y" type patterns:
+    #"\\bnot\\s+(?:just|only|merely)?\\s*(?:[^\\s]+\\s*){1,6}?[,;:—–-]?\\s*but\\s+(?:also\\s+)?",
+    #"\\bnot\\s+only\\s+(?:[^\\s]+\\s*){1,6}?[,;:—–-]?\\s*but\\s+also\\s+",
+    #"\\bit'?s\\s+not\\s+(?:just|only|merely)?\\s*(?:[^\\s]+\\s*){1,6}?[,;:—–-]\\s*it'?s\\s+",
+    #"\\b(?:[^\\s]+\\s*){1,4}?is\\s+not\\s+(?:just\\s+|only\\s+)?(?:about\\s+)?(?:[^\\s]+\\s*){1,6}?[,;:—–-]\\s*it'?s\\s+(?:about\\s+)?"
+]
+  
+
+# --- Metrics ---
+min_word_len_for_analysis: 3 # For n-gram analysis and lexical diversity
+freq_norm_denom_for_analysis: 100000 # For normalizing frequencies
+top_n_repetition_stat: 50 # N-grams from each category to track for repetition stats
+
+# --- DPO Finetuning (Optional, controlled by --run-finetune flag) ---
+finetune_enabled_by_default: false # Can be overridden by --run-finetune
+finetune_base_model_id: "unsloth/gemma-3-1b-it" # Base model for DPO
+finetune_max_seq_length: 2048
+finetune_load_in_4bit: true
+finetune_lora_r: 16
+finetune_lora_alpha: 32
+finetune_lora_dropout: 0.05
+finetune_target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+finetune_gradient_checkpointing: "unsloth"
+finetune_chat_template: "gemma-3"
+finetune_batch_size: 1
+finetune_gradient_accumulation_steps: 4
+finetune_warmup_ratio: 0.1
+finetune_num_epochs: 1 # Reduced for quick example, typically 1-3
+finetune_learning_rate: 0.00005 # 5e-5
+finetune_beta: 0.1 # DPO beta
+finetune_output_dir_suffix: "_dpo_finetuned" # Appended to experiment run dir
+finetune_save_merged_16bit: false
+finetune_save_gguf_q8_0: false
