@@ -6,7 +6,7 @@ from pathlib import Path
 from collections import Counter
 import pandas as pd
 import nltk
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 
 # Assuming slop-forensics is in sys.path via main.py
 from slop_forensics.slop_lists import extract_and_save_slop_phrases as _extract_slop_phrases
