@@ -49,6 +49,10 @@ def main():
     )
     vllm_group.add_argument("--vllm-port", type=int, help="Port for vLLM server. Overrides config.")
     vllm_group.add_argument("--vllm-model-id", type=str, help="Model ID for vLLM server. Overrides config.")
+    vllm_group.add_argument( # <<< ADDED
+        "--generation-api-base-url", type=str,
+        help="API base URL for generation requests (passed to antislop-vllm). E.g., http://host:port/v1. Overrides config."
+    )
 
     # --- Pipeline Control ---
     pipeline_group = parser.add_argument_group('Pipeline Control')

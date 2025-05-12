@@ -2,3 +2,5 @@ config.yaml
 __pycache__
 experiments
 *.pyc
+unsloth_compiled_cache
+results

@@ -22,10 +22,12 @@ num_iterations: 2 # Min 2: 1 for baseline, 1+ for unslopping
 
 # --- Generation Script (antislop-vllm/main.py) Parameters ---
 # These will be passed as CLI arguments to antislop-vllm/main.py
-generation_model_id: "unsloth/gemma-3-1b-it" # Model name for generation requests
+#generation_api_base_url: "http://localhost:8000/v1"
+generation_api_base_url: "https://kn7r3uwcgid4xp-8888.proxy.runpod.net/v1"
+generation_model_id: "unsloth/gemma-3-4b-it" # Model name for generation requests
 generation_api_key: "xxx" # API key for the vLLM server
 generation_max_new_tokens: 2000
-generation_threads: 8 # Number of parallel threads for API queries in antislop-vllm
+generation_threads: 60 # Number of parallel threads for API queries in antislop-vllm
 generation_max_prompts: 80 # Max new prompts for antislop-vllm to process from source
 generation_hf_dataset_name: 'Nitral-AI/Reddit-SFW-Writing_Prompts_ShareGPT'
 generation_hf_dataset_split: 'train'

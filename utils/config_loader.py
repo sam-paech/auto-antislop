@@ -26,6 +26,7 @@ DEFAULT_CONFIG = {
     "num_iterations": 2,
 
     # Generation Script (antislop-vllm/main.py) Parameters
+    "generation_api_base_url": "http://localhost:8000/v1",
     "generation_model_id": "unsloth/gemma-3-1b-it",
     "generation_api_key": "xxx",
     "generation_max_new_tokens": 2000,
@@ -132,7 +133,7 @@ def load_pipeline_config(config_path: Path) -> dict:
         except Exception as e:
             logger.error(f"Error loading config file {config_path}: {e}. Using defaults.")
     else:
-        logger.info("No config file specified or found. Using default configuration.")
+        logger.info("No config ser = argparse.ArgumentParserfile specified or found. Using default configuration.")
     return config
 
 def merge_config_with_cli_args(config: dict, cli_args: argparse.Namespace) -> dict:
@@ -142,11 +143,12 @@ def merge_config_with_cli_args(config: dict, cli_args: argparse.Namespace) -> di
 
     for key, value in cli_args_dict.items():
         if value is not None: # Only override if CLI arg was actually provided
-            # Check if this key exists in DEFAULT_CONFIG to avoid adding unrelated argparse internals
-            if key in DEFAULT_CONFIG:
-                 merged_config[key] = value
-            elif key == "config_file" or key == "resume_from_dir" or key == "run_finetune" or key == "log_level": # Special CLI args
-                 merged_config[key] = value
+            # Check if this key exists in DEFAULT_CONFIG or is a special CLI arg
+            if key in DEFAULT_CONFIG or key in [
+                "config_file", "resume_from_dir", "run_finetune", "log_level",
+                "generation_api_base_url" # <<< ENSURE IT'S HANDLED
+            ]:
+                merged_config[key] = value
 
 
     # Handle specific boolean flags that might not be in DEFAULT_CONFIG but are CLI-only controls

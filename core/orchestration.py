@@ -56,11 +56,22 @@ def run_generation_script_wrapper(
         # return os.path.relpath(relative_to_project_root.resolve(), workdir.resolve())
         # Simpler: assume paths passed are already absolute from experiment_dir
         return str(p)
+    
+
+    # Ensure generation_api_base_url is present in config, falling back if necessary
+    # (though DEFAULT_CONFIG should provide it)
+    gen_api_base_url = config.get('generation_api_base_url')
+    if not gen_api_base_url:
+        # Fallback or error if not configured - DEFAULT_CONFIG should prevent this
+        logger.warning("generation_api_base_url not found in config, attempting fallback using vllm_port. "
+                       "Please configure generation_api_base_url.")
+        gen_api_base_url = f"http://127.0.0.1:{config.get('vllm_port', 8000)}/v1"
+
 
 
     cmd = [
         sys.executable, str(main_py),
-        "--api-base-url", f"http://127.0.0.1:{config['vllm_port']}/v1",
+        "--api-base-url", gen_api_base_url,
         "--api-key", config['generation_api_key'],
         "--model-name", config['generation_model_id'],
         "--output-jsonl", rel_to_workdir(output_jsonl_path),
