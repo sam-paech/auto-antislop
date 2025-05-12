@@ -6,6 +6,7 @@ from pathlib import Path
 from collections import Counter
 import pandas as pd
 import nltk
+import numpy as np
 from typing import List, Tuple, Dict, Optional
 
 # Assuming slop-forensics is in sys.path via main.py
@@ -51,105 +52,83 @@ def build_overrep_word_csv(
     texts: List[str],
     out_csv: Path,
     top_n_words_analysis: int,
-    stop_words_set: set,
+    stop_words_set: Optional[set] = None,   # ← keeps the caller happy
 ) -> Tuple[pd.DataFrame, List[str], List[str]]:
     """
-    Analyse *texts* for over-represented words, write the CSV to *out_csv*
-    and return (df, dict_words, nodict_words).
-
-    A companion log file with the same basename and “.log” extension is always
-    written at DEBUG level.
+    Notebook-faithful implementation that also accepts *stop_words_set* so the
+    CLI call `build_overrep_word_csv(..., stop_words_set=…)` keeps working.
+    Returns (df, dict_words, nodict_words).
     """
-    # ------------------------------------------------------------------ set-up
+    # ---- logging -----------------------------------------------------------
     log_path = out_csv.with_suffix(".log")
-    if not any(
-        isinstance(h, logging.FileHandler) and h.baseFilename == str(log_path)
-        for h in logger.handlers
-    ):
+    if not any(isinstance(h, logging.FileHandler) and h.baseFilename == str(log_path)
+               for h in logger.handlers):
         fh = logging.FileHandler(log_path, encoding="utf-8")
-        fh.setFormatter(
-            logging.Formatter("%(asctime)s  %(levelname)8s  %(name)s: %(message)s")
-        )
+        fh.setFormatter(logging.Formatter(
+            "%(asctime)s  %(levelname)8s  %(name)s: %(message)s"))
         fh.setLevel(logging.DEBUG)
         logger.addHandler(fh)
     logger.setLevel(logging.DEBUG)
 
     logger.debug("build_overrep_word_csv: %d input texts", len(texts))
 
-    if not texts:
-        logger.warning("No texts – writing empty CSV.")
-        empty = pd.DataFrame(
-            columns=["word", "ratio_corpus/wordfreq",
-                     "corpus_freq", "wordfreq_freq", "modulated_score"]
-        )
-        empty.to_csv(out_csv, index=False)
-        return empty, [], []
-
-    # --------------------------------------------------------- word counting
-    counts = get_word_counts(
-        texts,
-        normalize_func=local_normalize_text,
-        extract_func=local_extract_words,
-    )
-    logger.debug("vocab: %d unique tokens after normalisation", len(counts))
+    # ---------- flatten + count (identical to notebook) ---------------------
+    counts = get_word_counts(texts)  # ← ***no extra kwargs***
 
     counts = filter_mostly_numeric(counts)
     counts = merge_plural_possessive_s(counts)
-    counts = filter_stopwords(counts, stop_words_set=stop_words_set)
-    logger.debug("vocab after filters: %d", len(counts))
 
-    # ------------------------------------------------ rarity + over-rep score
+    # keep the caller’s custom stop-word list if provided
+    if stop_words_set is None:
+        counts = filter_stopwords(counts)
+    else:
+        counts = filter_stopwords(counts, stop_words_set=stop_words_set)
+
+    # ---------- rarity + over-rep score -------------------------------------
     corpus_freqs, wf_freqs, *_ = analyze_word_rarity(counts)
     overrep = find_over_represented_words(
         corpus_freqs, wf_freqs, top_n=top_n_words_analysis
     )
-    logger.debug("find_over_represented_words → %d rows", len(overrep))
 
-    # fallback: tiny corpora often produce nothing – rank by corpus_freq alone
-    if not overrep:
-        logger.info(
-            "No over-rep words from toolkit – falling back to raw corpus frequency."
-        )
-        overrep = sorted(
-            corpus_freqs.items(), key=lambda kv: kv[1], reverse=True
-        )[:top_n_words_analysis]
-        # reshape to expected 4-tuple rows
-        overrep = [
-            (w, (cf / max(wf_freqs.get(w, 1e-12), 1e-12)), cf, wf_freqs.get(w, 0.0))
-            for w, cf in overrep
-        ]
-
-    # ------------------------------------------------ dataframe
+    # ---------- DataFrame ---------------------------------------------------
     df = pd.DataFrame(
         overrep,
-        columns=["word", "ratio_corpus/wordfreq", "corpus_freq", "wordfreq_freq"],
+        columns=[
+            "word",
+            "ratio_corpus/wordfreq",
+            "corpus_freq",
+            "wordfreq_freq",
+        ],
     )
-    for c in ("ratio_corpus/wordfreq", "corpus_freq", "wordfreq_freq"):
-        df[c] = pd.to_numeric(df[c], errors="coerce")
 
+    num_cols = ["ratio_corpus/wordfreq", "corpus_freq", "wordfreq_freq"]
+    df[num_cols] = df[num_cols].apply(pd.to_numeric, errors="coerce")
+
+    # ---------- modulated_score for dictionary words ------------------------
     dict_mask = df["wordfreq_freq"] > 0
     if dict_mask.any():
-        df_dict = df.loc[dict_mask]
-        mod_score = (
-            df_dict["ratio_corpus/wordfreq"]
-            * df_dict["corpus_freq"].pow(BOOST_EXPONENT)
-            / df_dict["wordfreq_freq"].pow(ATTEN_EXPONENT).replace(0, 1)
+        df_dict = df[dict_mask].copy()
+        boost = np.power(df_dict["corpus_freq"], BOOST_EXPONENT)
+        atten = np.power(df_dict["wordfreq_freq"], ATTEN_EXPONENT)
+        atten_safe = np.where(atten == 0, 1, atten)
+
+        df.loc[dict_mask, "modulated_score"] = (
+            df_dict["ratio_corpus/wordfreq"] * boost / atten_safe
         )
-        df.loc[dict_mask, "modulated_score"] = mod_score
-        logger.debug("modulated_score computed for %d dictionary words", dict_mask.sum())
 
-    # ------------------------------------------------ write CSV + summaries
+    # ---------- write CSV ---------------------------------------------------
     df.to_csv(out_csv, index=False)
-    logger.info("over-rep CSV written → %s  (%d rows)", out_csv, len(df))
+    logger.info("🔎 over-rep word CSV → %s  (%d rows)", out_csv, len(df))
 
+    # ---------- split & sort ------------------------------------------------
+    dict_words_df = df[dict_mask]
     dict_words = (
-        df.loc[dict_mask]
-        .sort_values("modulated_score", ascending=False)["word"]
-        .tolist()
-        if dict_mask.any()
-        else []
+        dict_words_df.sort_values("modulated_score", ascending=False)["word"].tolist()
+        if "modulated_score" in dict_words_df.columns
+        else dict_words_df["word"].tolist()
     )
-    nodict_words = df.loc[~dict_mask, "word"].tolist()
+    nodict_words = df[~dict_mask]["word"].tolist()
+
     logger.debug(
         "returning %d dict words, %d non-dict words", len(dict_words), len(nodict_words)
     )
