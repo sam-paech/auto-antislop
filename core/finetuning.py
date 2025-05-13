@@ -1,3 +1,36 @@
+logger = logging.getLogger(__name__)
+# --- Attempt to import Unsloth and related libraries only when this function is called ---
+#if not UNSLOTH_LIBS_LOADED:
+try:
+    from unsloth import FastLanguageModel
+    from transformers import AutoTokenizer, TextStreamer # Added TextStreamer for potential inference example
+    from trl import DPOTrainer, DPOConfig
+    from datasets import load_dataset
+    from unsloth.chat_templates import get_chat_template
+    
+    # Make these available in the function's local scope for convenience
+    # Or, you can just use them directly as `unsloth.FastLanguageModel` etc.
+    # For cleaner code within the function, assigning to local variables is fine.
+    globals()['FastLanguageModel'] = FastLanguageModel
+    globals()['AutoTokenizer'] = AutoTokenizer
+    globals()['TextStreamer'] = TextStreamer
+    globals()['DPOTrainer'] = DPOTrainer
+    globals()['DPOConfig'] = DPOConfig
+    globals()['load_dataset'] = load_dataset
+    globals()['get_chat_template'] = get_chat_template
+    
+    UNSLOTH_LIBS_LOADED = True
+    logger.info("Unsloth and DPO finetuning libraries loaded successfully.")
+except ImportError as e:
+    logger.error(f"Failed to import Unsloth or its dependencies: {e}. DPO finetuning cannot proceed.")
+    logger.error("Please ensure Unsloth, TRL, PEFT, Accelerate, BitsandBytes, Transformers, and Datasets are installed.")
+    #return # Exit if essential libraries can't be loaded
+
+#if not UNSLOTH_LIBS_LOADED: # Double check, in case of other import issues
+#    logger.error("Unsloth libraries are not available. Aborting DPO finetuning.")
+#    return
+
+
 import os
 import torch # Keep torch as it might be used for GPU checks earlier if needed
 import logging
@@ -25,7 +58,7 @@ def temp_disable_ckpt(module):
         for m, flag in saved:
             m.gradient_checkpointing = flag
 
-logger = logging.getLogger(__name__)
+
 
 # ── QUIET-MODE FOR DATASETS / TRANSFORMERS ────────────────────────────
 import datasets, transformers, warnings, contextlib, io, os
@@ -185,38 +218,9 @@ def load_tdpo_dataset(path: Path, tokenizer):
 
 
 def run_dpo_finetune(config: dict, experiment_run_dir: Path):
-    global UNSLOTH_LIBS_LOADED # To modify the global flag
+    #global UNSLOTH_LIBS_LOADED # To modify the global flag
 
-    # --- Attempt to import Unsloth and related libraries only when this function is called ---
-    if not UNSLOTH_LIBS_LOADED:
-        try:
-            from unsloth import FastLanguageModel
-            from transformers import AutoTokenizer, TextStreamer # Added TextStreamer for potential inference example
-            from trl import DPOTrainer, DPOConfig
-            from datasets import load_dataset
-            from unsloth.chat_templates import get_chat_template
-            
-            # Make these available in the function's local scope for convenience
-            # Or, you can just use them directly as `unsloth.FastLanguageModel` etc.
-            # For cleaner code within the function, assigning to local variables is fine.
-            globals()['FastLanguageModel'] = FastLanguageModel
-            globals()['AutoTokenizer'] = AutoTokenizer
-            globals()['TextStreamer'] = TextStreamer
-            globals()['DPOTrainer'] = DPOTrainer
-            globals()['DPOConfig'] = DPOConfig
-            globals()['load_dataset'] = load_dataset
-            globals()['get_chat_template'] = get_chat_template
-            
-            UNSLOTH_LIBS_LOADED = True
-            logger.info("Unsloth and DPO finetuning libraries loaded successfully.")
-        except ImportError as e:
-            logger.error(f"Failed to import Unsloth or its dependencies: {e}. DPO finetuning cannot proceed.")
-            logger.error("Please ensure Unsloth, TRL, PEFT, Accelerate, BitsandBytes, Transformers, and Datasets are installed.")
-            return # Exit if essential libraries can't be loaded
-
-    if not UNSLOTH_LIBS_LOADED: # Double check, in case of other import issues
-        logger.error("Unsloth libraries are not available. Aborting DPO finetuning.")
-        return
+    
 
     logger.info("Starting DPO finetuning process...")
 
