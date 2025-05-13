@@ -31,6 +31,11 @@ except ImportError as e:
 #    logger.error("Unsloth libraries are not available. Aborting DPO finetuning.")
 #    return
 
+import unsloth_zoo.temporary_patches as _tp
+_old = _tp.scaled_dot_product_attention
+def _wrapped_sdpa(*a, attn_mask=None, **kw):
+    return _old(*a, attn_mask=attn_mask if attn_mask is not None else None, **kw)
+_tp.scaled_dot_product_attention = _wrapped_sdpa
 
 import os
 import torch # Keep torch as it might be used for GPU checks earlier if needed
@@ -161,7 +166,7 @@ class LastTokenDPOTrainer(DPOTrainer):
 
         out = model(
                 ids,
-                attention_mask = attn_mask,
+                #attention_mask = attn_mask,
                 use_cache      = False,
                 output_hidden_states = True)
         logits_last = out.logits[:, -1, :]                # [B,V]
