@@ -325,7 +325,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     # Hard-disable gradient-checkpointing for TDPO
     if mode == "tdpo":
         model.config._attn_implementation = "flash_attention_2"
-        model = model.to(model.device)
+        #model = model.to(model.device)
         if False:
             # 1. HF flag
             if getattr(model, "gradient_checkpointing", False):
