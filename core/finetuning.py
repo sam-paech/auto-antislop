@@ -148,17 +148,21 @@ class LastTokenDPOTrainer(DPOTrainer):
             [torch.tensor(x, device=model.device) for x in inputs["prompt_ids"]],
             batch_first=True, padding_value=model.config.pad_token_id
         )
-        attn = (ids != model.config.pad_token_id).long()
+        #attn = (ids != model.config.pad_token_id).long()
 
         chosen   = torch.tensor(inputs["chosen_token_id"],   device=model.device)
         rejected = torch.tensor(inputs["rejected_token_id"], device=model.device)
 
-        attn_mask = torch.tensor(0.0, dtype=torch.float32, device=model.device)
+        B, L = ids.shape                         # batch, length
+        attn_mask = torch.zeros(                 # all-zero ⇒ no positions masked
+            (B, L), dtype=torch.uint8,           # bool also works, uint8 cheapest
+            device=ids.device)
 
-        out   = model( ids,
-               attention_mask = attn_mask,     # <- 0-D broadcasts
-               use_cache      = False,
-               output_hidden_states = False)
+        out = model(
+                ids,
+                attention_mask = attn_mask,
+                use_cache      = False,
+                output_hidden_states = False)
         logits_last = out.logits[:, -1, :]                # [B,V]
 
         logp_good = F.log_softmax(logits_last, -1).gather(
