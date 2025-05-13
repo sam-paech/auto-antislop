@@ -108,110 +108,115 @@ UNSLOTH_LIBS_LOADED = False
 
 
 class LastTokenDPOTrainer(DPOTrainer):
+    """
+    Exactly like TRL’s DPOTrainer, but the loss looks only at the first
+    diverging token in each preference pair.
+    """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.remove_unused_columns = False          # keep custom cols
-        # tell Trainer not to replace our collator
-        self.data_collator = self.tdpo_collator
+        self.remove_unused_columns = False
+        self.data_collator = self.tdpo_collator   # override default collator
 
-    # ------------------------------------------------------------
-    @staticmethod
-    def tdpo_collator(features):
+    # ----------------------------------------------------------
+    def tdpo_collator(self, features):
         """
-        Convert a list of dicts with keys
-          prompt_ids, attention_mask, chosen_token_id, rejected_token_id
-        into a batch of PyTorch tensors.
+        Build a batch:
+            prompt_ids        : [B, L] padded
+            attention_mask    : [B, L] 1=token, 0=pad
+            chosen_token_id   : [B]
+            rejected_token_id : [B]
         """
-        batch = {}
-        for k in ("prompt_ids", "attention_mask",
-                  "chosen_token_id", "rejected_token_id"):
-            batch[k] = default_collate([f[k] for f in features])
-        return batch
+        pad_id = self.padding_value               # set by the parent DPOTrainer
+
+        prompt_tensors = [torch.tensor(f["prompt_ids"]) for f in features]
+        prompt_ids = pad_sequence(prompt_tensors, batch_first=True,
+                                  padding_value=pad_id)          # [B, L]
+        attention_mask = (prompt_ids != pad_id).long()            # [B, L]
+
+        chosen   = torch.tensor([f["chosen_token_id"]   for f in features])
+        rejected = torch.tensor([f["rejected_token_id"] for f in features])
+
+        return {
+            "prompt_ids": prompt_ids,
+            "attention_mask": attention_mask,
+            "chosen_token_id": chosen,
+            "rejected_token_id": rejected,
+        }
+
+    # ----------------------------------------------------------
     def compute_loss(self, model, inputs, return_outputs=False, **_):
-        # -- tensors ------------------------------------------------------
-        ids = pad_sequence(
-            [torch.tensor(x, device=model.device) for x in inputs["prompt_ids"]],
-            batch_first=True, padding_value=model.config.pad_token_id
-        )
-        #attn = (ids != model.config.pad_token_id).long()
+        ids      = inputs["prompt_ids"].to(model.device)          # [B, L]
+        attn     = inputs["attention_mask"].to(model.device)      # [B, L]
+        chosen   = inputs["chosen_token_id"].to(model.device)     # [B]
+        rejected = inputs["rejected_token_id"].to(model.device)   # [B]
 
-        chosen   = torch.tensor(inputs["chosen_token_id"],   device=model.device)
-        rejected = torch.tensor(inputs["rejected_token_id"], device=model.device)
+        # Forward pass – no explicit mask; Flash-Attn handles causal masking
+        out = model(ids, attention_mask=None,
+                    use_cache=False, output_hidden_states=True)
 
-        B, L = ids.shape
-        H     = model.config.num_attention_heads       # 4 for Gemma-3B
+        # Logits at the true last token of each prompt
+        last_index = attn.sum(1) - 1                              # [B]
+        logits_last = out.logits[torch.arange(ids.size(0), device=model.device),
+                                 last_index, :]                   # [B, V]
 
-        # bool keeps it tiny: 1 bit per entry (stored as 1 byte on GPU)
-        attn_mask = torch.zeros((B, H, L, L), dtype=torch.bool, device=ids.device)
+        logp_good = F.log_softmax(logits_last, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
+        logp_bad  = F.log_softmax(logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
 
-        out = model(
-                ids,
-                attention_mask = attn_mask,
-                use_cache      = False,
-                output_hidden_states = True)
-        logits_last = out.logits[:, -1, :]                # [B,V]
-
-        logp_good = F.log_softmax(logits_last, -1).gather(
-                    -1, chosen.unsqueeze(-1)).squeeze(-1)
-        logp_bad  = F.log_softmax(logits_last, -1).gather(
-                    -1, rejected.unsqueeze(-1)).squeeze(-1)
-
+        # Reference model (frozen)
         with torch.no_grad():
-            ref_logits = self.ref_model.lm_head(           # share lm_head
-                model.get_input_embeddings()(ids[:, -1])
-            )
-            ref_good = F.log_softmax(ref_logits, -1).gather(
-                        -1, chosen.unsqueeze(-1)).squeeze(-1)
-            ref_bad  = F.log_softmax(ref_logits, -1).gather(
-                        -1, rejected.unsqueeze(-1)).squeeze(-1)
+            tokens_last = ids[torch.arange(ids.size(0), device=model.device), last_index]
+            ref_logits = self.ref_model.lm_head(model.get_input_embeddings()(tokens_last))
+            ref_good = F.log_softmax(ref_logits, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
+            ref_bad  = F.log_softmax(ref_logits, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
 
         delta = (logp_good - ref_good) - (logp_bad - ref_bad)
         loss  = -F.logsigmoid(self.beta * delta).mean()
 
-        stats = {"chosen_wins": (delta > 0).float().mean().detach()}
-        return (loss, stats) if return_outputs else loss
-    
-    def _prepare_dataset(
-        self,
-        dataset,
-        processing_class=None,
-        args=None,
-        split="train",
-    ):
-        """
-        Bypass DPOTrainer's default preprocessing, which expects
-        'prompt'/'chosen'/'rejected' columns.  Our TDPO dataset is already
-        tokenised and has columns:
-          prompt_ids, attention_mask, chosen_token_id, rejected_token_id
-        So we simply return it unchanged.
-        """
+        if return_outputs:
+            stats = {"chosen_wins": (delta > 0).float().mean().detach()}
+            return loss, stats
+        return loss
+
+    # ----------------------------------------------------------
+    def _prepare_dataset(self, dataset, *args, **_):
+        # TDPO dataset is already tokenised; leave unchanged
         return dataset
 
 
-def load_tdpo_dataset(path: Path, tokenizer):
-    ds = load_dataset("json", data_files=str(path), split="train")
+# ---------------------------------------------------------------------
+# 1.  Dataset loader for “final-token DPO”
+# ---------------------------------------------------------------------
 
-    MAX_SEQ_LEN = 4096                       # ➊ the new ceiling
-    tokenizer.truncation_side = "left"       # ➋ drop OLD context, keep the end
+
+def load_tdpo_dataset(path: Path, tokenizer, max_seq_len: int = 4096):
+    """
+    Each JSONL row must have
+        • context_with_chat_template : shared prompt
+        • chosen_decoded             : human-picked next token (string)
+        • rejected_decoded           : model alternative (string)
+    Returns a HF Dataset with integer fields ready for the trainer.
+    """
+    ds = load_dataset("json", data_files=str(path), split="train")
+    tokenizer.truncation_side = "left"        # keep the most recent history
 
     def _tok(ex):
         enc = tokenizer(
             ex["context_with_chat_template"],
             add_special_tokens=False,
             truncation=True,
-            max_length=MAX_SEQ_LEN - 1,      # ➌ leave one slot for the “next-token” logits
-            return_attention_mask=False      #    (no mask => no 4-D blow-up)
+            max_length=max_seq_len - 1,       # one slot left for the “next” token
+            return_attention_mask=False,
         )
         return {
-            "prompt_ids":        enc.input_ids,
-            "attention_mask":    None,       # won’t be used
+            "prompt_ids": enc.input_ids,
             "chosen_token_id":   tokenizer(ex["chosen_decoded"],
-                                        add_special_tokens=False).input_ids[0],
+                                           add_special_tokens=False).input_ids[0],
             "rejected_token_id": tokenizer(ex["rejected_decoded"],
-                                        add_special_tokens=False).input_ids[0],
+                                           add_special_tokens=False).input_ids[0],
         }
 
     return ds.map(_tok, remove_columns=ds.column_names)
+
 
 
 
