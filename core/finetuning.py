@@ -97,33 +97,60 @@ class LastTokenDPOTrainer(DPOTrainer):
         model,
         inputs,
         return_outputs: bool = False,
-        **kwargs                # ← swallow num_items_in_batch or anything else
+        **kwargs,                               # swallows num_items_in_batch, etc.
     ):
-        ids           = inputs["prompt_ids"]         # [B,L]
-        mask          = inputs["attention_mask"]     # [B,L]
-        chosen_id     = inputs["chosen_token_id"]    # [B]
-        rejected_id   = inputs["rejected_token_id"]  # [B]
+        """
+        Expected batch keys (all on the same device):
+        prompt_ids         – LongTensor [B, L]   padded on the right
+        attention_mask     – LongTensor [B, L]   1 = token, 0 = pad
+        chosen_token_id    – LongTensor [B]      single id per example
+        rejected_token_id  – LongTensor [B]      single id per example
+        """
+        # --- make sure everything is a tensor ---------------------------------
+        def as_tensor(x):                           # handles list → tensor
+            return x if torch.is_tensor(x) else torch.tensor(x, device=model.device)
 
-        out   = model(ids, attention_mask=mask, output_hidden_states=True, use_cache=False)
-        last  = mask.sum(dim=1) - 1                  # index of last non-pad per example,  [B]
-        h_T   = out.hidden_states[-1][               # gather hidden state
-                   torch.arange(ids.size(0), device=ids.device),
-                   last
-               ]                                     # [B,d]
+        ids         = as_tensor(inputs["prompt_ids"]).to(model.device)
+        mask        = as_tensor(inputs["attention_mask"]).to(model.device)
+        chosen_id   = as_tensor(inputs["chosen_token_id"]).to(model.device)
+        rejected_id = as_tensor(inputs["rejected_token_id"]).to(model.device)
 
-        logits       = model.lm_head(h_T)            # [B,V]
-        logp_good    = torch.log_softmax(logits, -1).gather(-1, chosen_id.unsqueeze(-1)).squeeze(-1)
-        logp_bad     = torch.log_softmax(logits, -1).gather(-1, rejected_id.unsqueeze(-1)).squeeze(-1)
+        # --- forward & gather last hidden state --------------------------------
+        outputs = model(
+            ids,
+            attention_mask=mask,
+            output_hidden_states=True,
+            use_cache=False,
+        )
+        last_idx = mask.sum(dim=1) - 1                       # [B]
+        h_T = outputs.hidden_states[-1][
+            torch.arange(ids.size(0), device=ids.device),
+            last_idx,
+        ]                                                     # [B, d]
+
+        # --- logits & log-probs -------------------------------------------------
+        logits      = model.lm_head(h_T)                     # [B, V]
+        logp_good   = F.log_softmax(logits, -1).gather(
+            -1, chosen_id.unsqueeze(-1)).squeeze(-1)         # [B]
+        logp_bad    = F.log_softmax(logits, -1).gather(
+            -1, rejected_id.unsqueeze(-1)).squeeze(-1)       # [B]
 
         with torch.no_grad():
-            ref_logits   = self.ref_model.lm_head(h_T)
-            ref_good     = torch.log_softmax(ref_logits, -1).gather(-1, chosen_id.unsqueeze(-1)).squeeze(-1)
-            ref_bad      = torch.log_softmax(ref_logits, -1).gather(-1, rejected_id.unsqueeze(-1)).squeeze(-1)
+            ref_logits = self.ref_model.lm_head(h_T)
+            ref_good   = F.log_softmax(ref_logits, -1).gather(
+                -1, chosen_id.unsqueeze(-1)).squeeze(-1)
+            ref_bad    = F.log_softmax(ref_logits, -1).gather(
+                -1, rejected_id.unsqueeze(-1)).squeeze(-1)
 
-        delta = (logp_good - ref_good) - (logp_bad - ref_bad)
-        loss  = -torch.logsigmoid(self.beta * delta).mean()
+        # --- DPO single-token objective ----------------------------------------
+        delta = (logp_good - ref_good) - (logp_bad - ref_bad)    # [B]
+        loss  = -F.logsigmoid(self.beta * delta).mean()
 
-        return (loss, None) if not return_outputs else (loss, inputs)
+        # --- metrics for the trainer logger ------------------------------------
+        chosen_win = (delta > 0).float().mean()                 # scalar tensor
+        stats = {"loss": loss.detach(), "chosen_wins": chosen_win}
+
+        return (loss, stats) if return_outputs else loss
     
     def _prepare_dataset(
         self,
