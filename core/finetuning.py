@@ -10,6 +10,21 @@ from torch.utils.data import default_collate
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 
+from contextlib import contextmanager
+
+@contextmanager
+def temp_disable_ckpt(module):
+    saved = []
+    for m in module.modules():
+        if hasattr(m, "gradient_checkpointing"):
+            saved.append((m, m.gradient_checkpointing))
+            m.gradient_checkpointing = False
+    try:
+        yield
+    finally:                                   # restore original state
+        for m, flag in saved:
+            m.gradient_checkpointing = flag
+
 logger = logging.getLogger(__name__)
 
 # ── QUIET-MODE FOR DATASETS / TRANSFORMERS ────────────────────────────
@@ -124,7 +139,7 @@ class LastTokenDPOTrainer(DPOTrainer):
                                     dtype=torch.long, device=device)
 
         # ------------- 1) prompt forward, no grad -------------------------
-        with torch.no_grad():
+        with torch.no_grad(), temp_disable_ckpt(model):
             past = model(
                 prompt_ids,
                 attention_mask=prompt_mask,
@@ -324,7 +339,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     
     # Hard-disable gradient-checkpointing for TDPO
     if mode == "tdpo":
-        model.config._attn_implementation = "flash_attention_2"
+        #model.config._attn_implementation = "flash_attention_2"
         #model = model.to(model.device)
         if False:
             # 1. HF flag
