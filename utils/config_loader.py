@@ -84,6 +84,8 @@ DEFAULT_CONFIG = {
 
     # DPO Finetuning
     "finetune_enabled": False,
+    "finetune_mode": "tdpo",                 # existing or add if missing
+    "finetune_tdpo_dataset": "",
     "finetune_base_model_id": "unsloth/gemma-3-1b-it",
     "finetune_max_seq_length": 2048,
     "finetune_load_in_4bit": True,

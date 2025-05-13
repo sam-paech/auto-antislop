@@ -124,7 +124,7 @@ def main():
         type=Path,
         default=None,
         help="(Optional) explicit path to a TDPO/last-token JSONL file. "
-            "If omitted and --finetune-mode last_token, the script will "
+            "If omitted and --finetune-mode is tdpo, the script will "
             "pick the highest iter_*_tdpo_pairs.jsonl in the experiment dir."
     )
 
