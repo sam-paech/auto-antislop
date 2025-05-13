@@ -171,45 +171,62 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         tokenizer.pad_token = tokenizer.eos_token
         logger.info("Set tokenizer.pad_token to tokenizer.eos_token.")
 
-    # --- Select dataset path according to finetune_mode ---
-    mode = config.get('finetune_mode', 'dpo')
+    
+    # ── Select dataset path according to finetune_mode ───────────────────
+    mode = config.get("finetune_mode", "dpo").lower()   # expect "dpo" or "tdpo"
     dataset_path = None
+
     if mode == "dpo":
+        # full-sequence preference pairs
         dataset_path = experiment_run_dir / "dpo_pairs_dataset.jsonl"
         if not dataset_path.is_file():
-            logger.error(f"Sequence-level DPO dataset not found at {dataset_path}")
+            logger.error(f"DPO dataset not found at {dataset_path}")
             return
-        dpo_dataset_hf = load_dataset("json", data_files=str(dataset_path), split="train")
 
-    else:  # tokenwise-dpo
-        if config.get('finetune_tdpo_dataset'):
-            dataset_path = Path(config['finetune_tdpo_dataset'])
+        dpo_dataset_hf = load_dataset(
+            "json",
+            data_files=str(dataset_path),
+            split="train"
+        )
+
+        # ── filter malformed rows (prompt / chosen / rejected missing) ──
+        req_cols = {"prompt", "chosen", "rejected"}
+        before_len = len(dpo_dataset_hf)
+        dpo_dataset_hf = dpo_dataset_hf.filter(
+            lambda x: all(col in x and x[col] for col in req_cols)
+        )
+        after_len = len(dpo_dataset_hf)
+        if after_len == 0:
+            logger.error("All rows in DPO dataset were filtered out. Check contents.")
+            return
+        if after_len < before_len:
+            logger.info(f"Filtered out {before_len - after_len} malformed rows; "
+                        f"{after_len} remain.")
+        logger.info(f"DPO dataset ready with {after_len} samples.")
+
+    elif mode == "tdpo":
+        # single-token preference pairs
+        if config.get("finetune_tdpo_dataset"):
+            dataset_path = Path(config["finetune_tdpo_dataset"])
         else:
             tdpo_files = sorted(experiment_run_dir.glob("iter_*_tdpo_pairs.jsonl"))
             if not tdpo_files:
-                logger.error("No iter_*_tdpo_pairs.jsonl files found for last-token TDPO.")
+                logger.error("No iter_*_tdpo_pairs.jsonl files found for TDPO.")
                 return
-            dataset_path = tdpo_files[-1]  # pick the latest
+            dataset_path = tdpo_files[-1]          # most recent iteration
+
         if not dataset_path.is_file():
             logger.error(f"TDPO dataset not found at {dataset_path}")
             return
-        # defer tokeniser creation until later, then call load_tdpo_dataset(tokenizer)
-        tdpo_dataset_path = dataset_path
 
+        # defer actual loading until tokenizer is ready
+        tdpo_dataset_path = dataset_path
         dpo_dataset_hf = load_tdpo_dataset(tdpo_dataset_path, tokenizer)
 
-
-    # Filter malformed rows
-    req_cols = {"prompt", "chosen", "rejected"}
-    before_len = len(dpo_dataset_hf)
-    dpo_dataset_hf = dpo_dataset_hf.filter(lambda x: all(col in x and x[col] for col in req_cols))
-    after_len = len(dpo_dataset_hf)
-    if after_len == 0:
-        logger.error("All rows in DPO dataset were filtered out (missing prompt, chosen, or rejected). Check dataset contents.")
+    else:
+        logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'tdpo'.")
         return
-    if after_len < before_len:
-        logger.info(f"Filtered out {before_len - after_len} malformed DPO rows; {after_len} remain.")
-    logger.info(f"DPO dataset ready with {after_len} samples.")
+
 
 
     # --- Model and Tokenizer Setup ---    
