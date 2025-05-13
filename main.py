@@ -78,9 +78,21 @@ def main():
     finetune_group.add_argument("--finetune-base-model-id", type=str, help="Base model for DPO. Overrides config.")
     finetune_group.add_argument("--finetune-num-epochs", type=int, help="Number of epochs for DPO. Overrides config.")
 
-    # Add more CLI overrides for other config keys as needed.
-    # For simplicity, this example keeps CLI overrides minimal, relying more on the config file.
-    # To add all, iterate DEFAULT_CONFIG keys and add_argument for each.
+    finetune_group.add_argument(
+        "--finetune-mode",
+        choices=["dpo", "tdpo"],
+        default="dpo",
+        help="dpo = vanilla DPO on full continuations (default); "
+            "tdpo = masked Tokenwise-DPO on partial generation pairs, only computing loss for the completion token."
+    )
+    finetune_group.add_argument(
+        "--finetune-tdpo-dataset",
+        type=Path,
+        default=None,
+        help="(Optional) explicit path to a TDPO/last-token JSONL file. "
+            "If omitted and --finetune-mode last_token, the script will "
+            "pick the highest iter_*_tdpo_pairs.jsonl in the experiment dir."
+    )
 
     args = parser.parse_args()
 
@@ -171,7 +183,7 @@ def main():
         logger.info(f"Total anti-slop pipeline duration: {pipeline_duration}")
 
     # --- DPO Finetuning (Optional) ---
-    should_run_finetune = config.get('finetune_enabled_by_default', False)
+    should_run_finetune = config.get('finetune_enabled', False)
     if args.run_finetune is not None:
         should_run_finetune = args.run_finetune
 

@@ -4,6 +4,8 @@ import logging
 from pathlib import Path
 # typing.Optional can be imported at the top level if used in type hints outside the function
 from typing import Optional 
+from trl import DPOTrainer
+from datasets import load_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +70,63 @@ for name in _noisy_torch_loggers:
 # Global flag to check if imports were successful, set within the function
 UNSLOTH_LIBS_LOADED = False
 
+
+class LastTokenDPOTrainer(DPOTrainer):
+    """
+    DPO where each example supplies:
+      prompt_ids          – encoded prompt (no candidate token)
+      chosen_token_id     – int64 scalar
+      rejected_token_id   – int64 scalar
+    Everything else (optimizer, schedulers, logging) is inherited.
+    """
+    def compute_loss(self, model, inputs, return_outputs=False):
+        prompt_ids         = inputs["prompt_ids"]          # [B, L]
+        chosen_token_id    = inputs["chosen_token_id"]     # [B]
+        rejected_token_id  = inputs["rejected_token_id"]   # [B]
+
+        # forward to get hidden state at final position
+        outputs = model(prompt_ids, output_hidden_states=True, use_cache=False)
+        h_T     = outputs.hidden_states[-1][:, -1, :]                    # [B, d]
+
+        lm_head = model.lm_head
+        logits  = lm_head(h_T)                                           # [B, V]
+        logp_ch = torch.log_softmax(logits, -1).gather(                  # [B]
+                     -1, chosen_token_id.unsqueeze(-1)).squeeze(-1)
+        logp_rj = torch.log_softmax(logits, -1).gather(
+                     -1, rejected_token_id.unsqueeze(-1)).squeeze(-1)
+
+        with torch.no_grad():
+            ref_logits   = self.ref_model.lm_head(h_T)
+            ref_logp_ch  = torch.log_softmax(ref_logits, -1).gather(
+                              -1, chosen_token_id.unsqueeze(-1)).squeeze(-1)
+            ref_logp_rj  = torch.log_softmax(ref_logits, -1).gather(
+                              -1, rejected_token_id.unsqueeze(-1)).squeeze(-1)
+
+        delta = (logp_ch - ref_logp_ch) - (logp_rj - ref_logp_rj)
+        loss  = -torch.logsigmoid(self.beta * delta).mean()
+
+        return (loss, None) if not return_outputs else (loss, inputs)
+
+def load_tdpo_dataset(path: Path, tokenizer):
+    """Return HF Dataset with columns prompt_ids, chosen_token_id, rejected_token_id."""
+    ds = load_dataset("json", data_files=str(path), split="train")
+
+    def _tokenise(ex):
+        prompt_ids = tokenizer(
+            ex["context_with_chat_template"],
+            truncation=True, add_special_tokens=False
+        ).input_ids
+        chosen_id   = tokenizer(ex["chosen_decoded"],   add_special_tokens=False).input_ids[0]
+        rejected_id = tokenizer(ex["rejected_decoded"], add_special_tokens=False).input_ids[0]
+        return {
+            "prompt_ids": prompt_ids,
+            "chosen_token_id": chosen_id,
+            "rejected_token_id": rejected_id,
+        }
+
+    return ds.map(_tokenise, remove_columns=ds.column_names)
+
+
 def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     global UNSLOTH_LIBS_LOADED # To modify the global flag
 
@@ -104,23 +163,43 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     logger.info("Starting DPO finetuning process...")
 
-    # --- Locate the DPO dataset from the current experiment run ---
-    dpo_file = experiment_run_dir / "dpo_pairs_dataset.jsonl"
-    if not dpo_file.is_file():
-        logger.error(f"DPO dataset not found at {dpo_file}. Run the anti-slop pipeline first to generate it.")
-        return
+    if config['finetune_chat_template']:
+        tokenizer = get_chat_template(
+            tokenizer,
+            chat_template=config['finetune_chat_template'],
+        )
+    if tokenizer.pad_token is None:
+        # this may not always be desired. adjust to the model you are finetuning.
+        tokenizer.pad_token = tokenizer.eos_token
+        logger.info("Set tokenizer.pad_token to tokenizer.eos_token.")
 
-    logger.info(f"Using DPO dataset: {dpo_file}")
-    
-    try:
-        # Use the globally available load_dataset (or from local scope if preferred)
-        dpo_dataset_hf = load_dataset("json", data_files=str(dpo_file), split="train")
-        if not dpo_dataset_hf or len(dpo_dataset_hf) == 0:
-            logger.error(f"Loaded DPO dataset from {dpo_file} is empty or failed to load.")
+    # --- Select dataset path according to finetune_mode ---
+    mode = config.get('finetune_mode', 'dpo')
+    dataset_path = None
+    if mode == "dpo":
+        dataset_path = experiment_run_dir / "dpo_pairs_dataset.jsonl"
+        if not dataset_path.is_file():
+            logger.error(f"Sequence-level DPO dataset not found at {dataset_path}")
             return
-    except Exception as e:
-        logger.error(f"Failed to load DPO dataset from {dpo_file}: {e}")
-        return
+        dpo_dataset_hf = load_dataset("json", data_files=str(dataset_path), split="train")
+
+    else:  # tokenwise-dpo
+        if config.get('finetune_tdpo_dataset'):
+            dataset_path = Path(config['finetune_tdpo_dataset'])
+        else:
+            tdpo_files = sorted(experiment_run_dir.glob("iter_*_tdpo_pairs.jsonl"))
+            if not tdpo_files:
+                logger.error("No iter_*_tdpo_pairs.jsonl files found for last-token TDPO.")
+                return
+            dataset_path = tdpo_files[-1]  # pick the latest
+        if not dataset_path.is_file():
+            logger.error(f"TDPO dataset not found at {dataset_path}")
+            return
+        # defer tokeniser creation until later, then call load_tdpo_dataset(tokenizer)
+        tdpo_dataset_path = dataset_path
+
+        dpo_dataset_hf = load_tdpo_dataset(tdpo_dataset_path, tokenizer)
+
 
     # Filter malformed rows
     req_cols = {"prompt", "chosen", "rejected"}
@@ -163,13 +242,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         max_seq_length=max_seq_length,
     )
 
-    tokenizer = get_chat_template(
-        tokenizer,
-        chat_template=config['finetune_chat_template'],
-    )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-        logger.info("Set tokenizer.pad_token to tokenizer.eos_token.")
+    
 
 
     # --- DPO Trainer Setup ---
@@ -187,7 +260,9 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     # else if not 4-bit, user could specify fp16 in config if desired.
     # For simplicity, this example prioritizes bf16 with 4-bit.
 
-    dpo_trainer = DPOTrainer(
+    TrainerClass = LastTokenDPOTrainer if mode == "tdpo" else DPOTrainer
+
+    dpo_trainer = TrainerClass(
         model=model,
         ref_model=None,
         train_dataset=dpo_dataset_hf,

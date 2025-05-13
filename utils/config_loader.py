@@ -82,7 +82,7 @@ DEFAULT_CONFIG = {
     "top_n_repetition_stat": 50,
 
     # DPO Finetuning
-    "finetune_enabled_by_default": False,
+    "finetune_enabled": False,
     "finetune_base_model_id": "unsloth/gemma-3-1b-it",
     "finetune_max_seq_length": 2048,
     "finetune_load_in_4bit": True,
@@ -153,7 +153,7 @@ def merge_config_with_cli_args(config: dict, cli_args: argparse.Namespace) -> di
 
     # Handle specific boolean flags that might not be in DEFAULT_CONFIG but are CLI-only controls
     if hasattr(cli_args, 'run_finetune') and cli_args.run_finetune is not None:
-        merged_config['finetune_enabled_by_default'] = cli_args.run_finetune
+        merged_config['finetune_enabled'] = cli_args.run_finetune
     if hasattr(cli_args, 'manage_vllm') and cli_args.manage_vllm is not None:
         merged_config['manage_vllm'] = cli_args.manage_vllm
 
