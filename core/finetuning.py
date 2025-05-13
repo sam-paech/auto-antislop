@@ -72,6 +72,25 @@ UNSLOTH_LIBS_LOADED = False
 
 
 class LastTokenDPOTrainer(DPOTrainer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.remove_unused_columns = False          # keep custom cols
+        # tell Trainer not to replace our collator
+        self.data_collator = self.tdpo_collator
+
+    # ------------------------------------------------------------
+    @staticmethod
+    def tdpo_collator(features):
+        """
+        Convert a list of dicts with keys
+          prompt_ids, attention_mask, chosen_token_id, rejected_token_id
+        into a batch of PyTorch tensors.
+        """
+        batch = {}
+        for k in ("prompt_ids", "attention_mask",
+                  "chosen_token_id", "rejected_token_id"):
+            batch[k] = default_collate([f[k] for f in features])
+        return batch
     def compute_loss(self, model, inputs, return_outputs=False):
         ids           = inputs["prompt_ids"]         # [B,L]
         mask          = inputs["attention_mask"]     # [B,L]
