@@ -114,7 +114,7 @@ finetune_enabled: true # Can be overridden by --run-finetune
 finetune_mode: "tdpo" # dpo / tdpo (tokenwise-dpo)
 #finetune_tdpo_dataset: "" # you can specify an existing tdpo dataset, or let the pipeline use the one produced in the generation step
 finetune_base_model_id: "unsloth/gemma-3-1b-it" # Base model for DPO
-finetune_max_seq_length: 2048
+finetune_max_seq_length: 4096
 finetune_load_in_4bit: true
 finetune_lora_r: 16
 finetune_lora_alpha: 32
