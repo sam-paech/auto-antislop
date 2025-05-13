@@ -1,24 +1,6 @@
 import logging
 logger = logging.getLogger(__name__)
 
-import torch.nn.functional as F
-
-# keep original
-_orig_sdpa = F.scaled_dot_product_attention
-
-def _sdpa_mask_ok(q, k, v, attn_mask=None, *args, **kw):
-    """
-    If the mask is 4-D (B, h, Lq, Lk) we forward it unchanged.
-    For every other shape – the 2-D mask that Unsloth composes or
-    the None case – we drop it so flash-attn uses its own causal bias.
-    """
-    good_mask = attn_mask is not None and attn_mask.dim() == 4
-    return _orig_sdpa(q, k, v,
-                      attn_mask = attn_mask if good_mask else None,
-                      *args, **kw)
-
-F.scaled_dot_product_attention = _sdpa_mask_ok
-
 # --- Attempt to import Unsloth and related libraries only when this function is called ---
 #if not UNSLOTH_LIBS_LOADED:
 try:
@@ -61,22 +43,6 @@ from datasets import load_dataset
 from torch.utils.data import default_collate
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
-
-from contextlib import contextmanager
-
-@contextmanager
-def temp_disable_ckpt(module):
-    saved = []
-    for m in module.modules():
-        if hasattr(m, "gradient_checkpointing"):
-            saved.append((m, m.gradient_checkpointing))
-            m.gradient_checkpointing = False
-    try:
-        yield
-    finally:                                   # restore original state
-        for m, flag in saved:
-            m.gradient_checkpointing = flag
-
 
 
 # ── QUIET-MODE FOR DATASETS / TRANSFORMERS ────────────────────────────
@@ -162,48 +128,165 @@ class LastTokenDPOTrainer(DPOTrainer):
             batch[k] = default_collate([f[k] for f in features])
         return batch
     def compute_loss(self, model, inputs, return_outputs=False, **_):
-        # -- tensors ------------------------------------------------------
-        ids = pad_sequence(
-            [torch.tensor(x, device=model.device) for x in inputs["prompt_ids"]],
-            batch_first=True, padding_value=model.config.pad_token_id
+        # -- Input Tensors --------------------------------------------------
+        # inputs["prompt_ids"] is a list of lists/tensors from tdpo_collator
+        # We need to pad them here to form a batch.
+        prompt_ids_list = [torch.tensor(x, device=model.device) for x in inputs["prompt_ids"]]
+        
+        # Pad the sequences to the longest sequence in the batch
+        # The padding value should be the tokenizer's pad_token_id
+        # model.config.pad_token_id might be None if not set, tokenizer.pad_token_id is safer
+        pad_token_id = self.tokenizer.pad_token_id
+        if pad_token_id is None:
+            # Fallback if tokenizer.pad_token is not set, though it should be.
+            pad_token_id = model.config.pad_token_id if model.config.pad_token_id is not None else 0 
+            logger.warning(f"Using pad_token_id: {pad_token_id} as tokenizer.pad_token_id was None.")
+
+        padded_prompt_ids = pad_sequence(
+            prompt_ids_list,
+            batch_first=True,
+            padding_value=pad_token_id
         )
-        #attn = (ids != model.config.pad_token_id).long()
 
-        chosen   = torch.tensor(inputs["chosen_token_id"],   device=model.device)
-        rejected = torch.tensor(inputs["rejected_token_id"], device=model.device)
+        # Create a 2D attention mask based on the padding
+        # This is the standard mask format Hugging Face models expect.
+        # 1 for tokens to attend to, 0 for padding tokens.
+        attention_mask = (padded_prompt_ids != pad_token_id).long() # .to(model.device) already done by tensor creation
 
-        B, L = ids.shape
-        H     = model.config.num_attention_heads       # 4 for Gemma-3B
+        chosen_token_ids = torch.tensor(inputs["chosen_token_id"], device=model.device)
+        rejected_token_ids = torch.tensor(inputs["rejected_token_id"], device=model.device)
 
-        # bool keeps it tiny: 1 bit per entry (stored as 1 byte on GPU)
-        attn_mask = torch.zeros((B, H, L, L), dtype=torch.bool, device=ids.device)
+        # -- Policy Model Forward Pass --------------------------------------
+        # Model expects: input_ids, attention_mask (2D)
+        # Unsloth / FlashAttention will handle causal masking internally if attention_mask is 2D
+        # or if attention_mask=None (but providing the 2D padding mask is safer and standard)
+        
+        # Make sure gradient checkpointing is handled correctly by Unsloth
+        # The extensive disabling in run_dpo_finetune should cover this.
+        # If still issues, the temp_disable_ckpt context manager could be used here.
+        # with temp_disable_ckpt(model) if mode == "tdpo" else contextlib.nullcontext():
+        
+        policy_outputs = model(
+            input_ids=padded_prompt_ids,
+            attention_mask=attention_mask,
+            use_cache=False, # Important for training
+            output_hidden_states=False # Not needed for logits
+        )
+        # Get logits for the *next* token prediction, i.e., at the last position of the prompt
+        # For each sequence in the batch, find its actual length (before padding)
+        # to get the logits at the correct position.
+        # sequence_lengths = attention_mask.sum(dim=1) # Number of non-padded tokens
+        # policy_logits_last_token = policy_outputs.logits[torch.arange(padded_prompt_ids.size(0)), sequence_lengths - 1, :]
+        
+        # Simpler: if all prompts are processed up to their actual end,
+        # the logits for the *next* token are at index -1 of the *output* sequence.
+        # This assumes the model's output sequence length matches input.
+        # For causal LMs, logits[b, t, :] are for predicting token t+1 given tokens 0...t.
+        # So, for a prompt of length L_prompt (non-padded), we need logits at index L_prompt-1.
+        
+        # The `DPOTrainer` and standard HF practice for getting chosen/rejected logps
+        # often involves passing the full chosen/rejected sequences.
+        # Here, we only care about the single next token.
+        # `policy_outputs.logits` is [B, L, V]
+        # We need the logits at the position *before* the chosen/rejected token would be.
+        
+        # Get the indices of the last actual token in each prompt
+        # (Batch_size, Prompt_length_in_batch)
+        # Example: [[1,2,3,PAD,PAD], [4,5,PAD,PAD,PAD]] -> lengths = [3,2] -> indices = [2,1]
+        prompt_lengths = torch.sum(attention_mask, dim=1)
+        last_token_indices = prompt_lengths - 1
 
-        out = model(
-                ids,
-                #attention_mask = attn_mask,
-                use_cache      = False,
-                output_hidden_states = True)
-        logits_last = out.logits[:, -1, :]                # [B,V]
+        # Gather the logits from the policy model at the end of each prompt
+        # logits are [Batch, SeqLen, VocabSize]
+        # We need to select [Batch, VocabSize] using last_token_indices
+        policy_logits_at_last_token = policy_outputs.logits[torch.arange(padded_prompt_ids.size(0), device=model.device), last_token_indices, :] # [B, V]
 
-        logp_good = F.log_softmax(logits_last, -1).gather(
-                    -1, chosen.unsqueeze(-1)).squeeze(-1)
-        logp_bad  = F.log_softmax(logits_last, -1).gather(
-                    -1, rejected.unsqueeze(-1)).squeeze(-1)
+        policy_logps_chosen = F.log_softmax(policy_logits_at_last_token, dim=-1).gather(
+            dim=-1, index=chosen_token_ids.unsqueeze(-1)
+        ).squeeze(-1)
+        policy_logps_rejected = F.log_softmax(policy_logits_at_last_token, dim=-1).gather(
+            dim=-1, index=rejected_token_ids.unsqueeze(-1)
+        ).squeeze(-1)
 
-        with torch.no_grad():
-            ref_logits = self.ref_model.lm_head(           # share lm_head
-                model.get_input_embeddings()(ids[:, -1])
-            )
-            ref_good = F.log_softmax(ref_logits, -1).gather(
-                        -1, chosen.unsqueeze(-1)).squeeze(-1)
-            ref_bad  = F.log_softmax(ref_logits, -1).gather(
-                        -1, rejected.unsqueeze(-1)).squeeze(-1)
+        # -- Reference Model Forward Pass -----------------------------------
+        if self.ref_model is not None:
+            with torch.no_grad():
+                self.ref_model.eval() # Ensure ref model is in eval mode
+                ref_outputs = self.ref_model(
+                    input_ids=padded_prompt_ids,
+                    attention_mask=attention_mask,
+                    use_cache=False,
+                    output_hidden_states=False
+                )
+                # ref_logits_last_token = ref_outputs.logits[torch.arange(padded_prompt_ids.size(0)), sequence_lengths - 1, :]
+                ref_logits_at_last_token = ref_outputs.logits[torch.arange(padded_prompt_ids.size(0), device=model.device), last_token_indices, :] # [B, V]
 
-        delta = (logp_good - ref_good) - (logp_bad - ref_bad)
-        loss  = -F.logsigmoid(self.beta * delta).mean()
 
-        stats = {"chosen_wins": (delta > 0).float().mean().detach()}
-        return (loss, stats) if return_outputs else loss
+                ref_logps_chosen = F.log_softmax(ref_logits_at_last_token, dim=-1).gather(
+                    dim=-1, index=chosen_token_ids.unsqueeze(-1)
+                ).squeeze(-1)
+                ref_logps_rejected = F.log_softmax(ref_logits_at_last_token, dim=-1).gather(
+                    dim=-1, index=rejected_token_ids.unsqueeze(-1)
+                ).squeeze(-1)
+        else:
+            # This case should ideally not happen if DPO trainer is initialized correctly
+            # or handle it by setting ref_logps to zero (as in original DPO paper if no ref model)
+            # For simplicity here, let's assume ref_model is always present.
+            # If you are using the same model weights for policy and ref (before fine-tuning)
+            # and only applying LoRA to policy, then ref_logps are effectively the initial state.
+            # The DPOTrainer handles ref_model creation if None is passed.
+            # For TDPO, the logic is log pi(t+) - log rho(t+) - (log pi(t-) - log rho(t-))
+            # If ref_model is None, DPOTrainer usually uses initial weights of the model.
+            # The `self.label_smoothed_nll_loss` in original DPOTrainer handles this.
+            # Here, we need explicit ref_logps.
+            # If you truly have no separate ref_model and want to use the initial policy model's
+            # logprobs (before this batch's update), that's more complex (store initial logprobs).
+            # The standard DPO setup implies self.ref_model is a frozen copy.
+            logger.warning("ref_model is None. Reference log probabilities will not be used, which deviates from DPO.")
+            # This will make the loss: -log_sigmoid(beta * (policy_logps_chosen - policy_logps_rejected))
+            # which is SLiC loss if beta=1.
+            # To adhere to DPO, ensure ref_model is properly configured.
+            # For now, to prevent crash, let's make them zero, but this is NOT DPO.
+            ref_logps_chosen = torch.zeros_like(policy_logps_chosen)
+            ref_logps_rejected = torch.zeros_like(policy_logps_rejected)
+
+
+        # -- DPO Loss Calculation -------------------------------------------
+        # log π(t⁺|prompt) – log ρ(t⁺|prompt)
+        pi_logratios_chosen = policy_logps_chosen - ref_logps_chosen
+        # log π(t⁻|prompt) – log ρ(t⁻|prompt)
+        pi_logratios_rejected = policy_logps_rejected - ref_logps_rejected
+
+        logits = pi_logratios_chosen - pi_logratios_rejected # This is the term inside σ: β * ( ... )
+        
+        # The DPO loss is -log σ(β * logits)
+        # Equivalent to F.binary_cross_entropy_with_logits with targets = 1
+        # loss = -F.logsigmoid(self.beta * logits).mean()
+        # Or, if using the DPO trainer's built-in loss computation style:
+        # (taken from TRL's DPOTrainer `dpo_loss` method)
+        loss = -F.logsigmoid(self.beta * logits).mean() # If all pairs are y_w=1, y_l=0
+        # For more general preference modeling (e.g. with margins or different weighting):
+        # loss = -F.logsigmoid(self.beta * logits).mean() # Common case
+        # loss = - (F.logsigmoid(self.beta * logits) * (1-self.label_smoothing) + F.logsigmoid(-self.beta*logits)*self.label_smoothing).mean() # with label smoothing
+
+        # -- Metrics --------------------------------------------------------
+        chosen_rewards = self.beta * pi_logratios_chosen.detach()
+        rejected_rewards = self.beta * pi_logratios_rejected.detach()
+        accuracy = (chosen_rewards > rejected_rewards).float().mean()
+
+        metrics = {
+            "loss": loss.item(), # Keep .item() for logging scalar values
+            "accuracy": accuracy.item(),
+            "margin": (chosen_rewards - rejected_rewards).mean().item(),
+            "rewards_chosen_mean": chosen_rewards.mean().item(),
+            "rewards_rejected_mean": rejected_rewards.mean().item(),
+        }
+        # Add chosen_wins from your original code if you prefer that name
+        metrics["chosen_wins"] = accuracy.item() 
+
+        if return_outputs:
+            return (loss, metrics) # TRL expects a dict for the second element usually
+        return loss
     
     def _prepare_dataset(
         self,
