@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional 
 from trl import DPOTrainer
 from datasets import load_dataset
+from torch.utils.data import default_collate
 
 logger = logging.getLogger(__name__)
 
