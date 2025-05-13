@@ -1,3 +1,4 @@
+import logging
 logger = logging.getLogger(__name__)
 # --- Attempt to import Unsloth and related libraries only when this function is called ---
 #if not UNSLOTH_LIBS_LOADED:
@@ -33,7 +34,6 @@ except ImportError as e:
 
 import os
 import torch # Keep torch as it might be used for GPU checks earlier if needed
-import logging
 from pathlib import Path
 # typing.Optional can be imported at the top level if used in type hints outside the function
 from typing import Optional 
