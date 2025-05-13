@@ -72,10 +72,6 @@ UNSLOTH_LIBS_LOADED = False
 
 
 class LastTokenDPOTrainer(DPOTrainer):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # keep custom columns; let compute_loss handle them
-        self.remove_unused_columns = False
     def compute_loss(self, model, inputs, return_outputs=False):
         ids           = inputs["prompt_ids"]         # [B,L]
         mask          = inputs["attention_mask"]     # [B,L]
@@ -318,6 +314,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             lr_scheduler_type="linear",
             bf16=use_bf16,
             fp16=use_fp16, # Ensure only one is true or both false
+            remove_unused_columns=False,
         ),
     )
 
