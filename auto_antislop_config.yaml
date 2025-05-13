@@ -21,6 +21,7 @@ vllm_extra_args: []
 num_iterations: 2 # Min 2: 1 for baseline, 1+ for unslopping
 
 # --- Generation Script (antislop-vllm/main.py) Parameters ---
+generation_step_enabled: true
 # These will be passed as CLI arguments to antislop-vllm/main.py
 #generation_api_base_url: "http://localhost:8000/v1"
 #generation_api_base_url: "https://kn7r3uwcgid4xp-8888.proxy.runpod.net/v1"

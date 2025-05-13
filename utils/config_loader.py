@@ -26,6 +26,7 @@ DEFAULT_CONFIG = {
     "num_iterations": 2,
 
     # Generation Script (antislop-vllm/main.py) Parameters
+    "generation_step_enabled": True,
     "generation_api_base_url": "http://localhost:8000/v1",
     "generation_model_id": "unsloth/gemma-3-1b-it",
     "generation_api_key": "xxx",
@@ -144,9 +145,10 @@ def merge_config_with_cli_args(config: dict, cli_args: argparse.Namespace) -> di
     for key, value in cli_args_dict.items():
         if value is not None: # Only override if CLI arg was actually provided
             # Check if this key exists in DEFAULT_CONFIG or is a special CLI arg
+            
             if key in DEFAULT_CONFIG or key in [
                 "config_file", "resume_from_dir", "run_finetune", "log_level",
-                "generation_api_base_url" # <<< ENSURE IT'S HANDLED
+                "generation_api_base_url", "generation_step_enabled"
             ]:
                 merged_config[key] = value
 
@@ -156,6 +158,9 @@ def merge_config_with_cli_args(config: dict, cli_args: argparse.Namespace) -> di
         merged_config['finetune_enabled'] = cli_args.run_finetune
     if hasattr(cli_args, 'manage_vllm') and cli_args.manage_vllm is not None:
         merged_config['manage_vllm'] = cli_args.manage_vllm
+    if getattr(cli_args, 'generation_step_enabled', None) is not None:
+        merged_config['generation_step_enabled'] = cli_args.generation_step_enabled
+
 
 
     return merged_config

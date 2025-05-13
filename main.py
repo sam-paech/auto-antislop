@@ -34,6 +34,20 @@ from core.finetuning import run_dpo_finetune
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("auto_antislop_main")
 
+
+def str2bool(v):
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return v
+    v = str(v).lower()
+    if v in ("yes", "true", "t", "1", "y"):
+        return True
+    if v in ("no", "false", "f", "0", "n"):
+        return False
+    raise argparse.ArgumentTypeError("Boolean value expected.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Auto-Antislop: Iterative dataset generation and DPO finetuning.")
     
@@ -54,8 +68,13 @@ def main():
     # --- vLLM Management ---
     vllm_group = parser.add_argument_group('vLLM Server Management')
     vllm_group.add_argument(
-        "--manage-vllm", action=argparse.BooleanOptionalAction, default=None, # Default from config
-        help="Let this script start/stop a local vLLM server. Overrides config."
+        "--manage-vllm",
+        type=str2bool,
+        nargs="?",
+        const=True,                          # `--manage-vllm` ⇒ True
+        default=None,                        # fall back to config
+        help="true/false to let this script start/stop a local vLLM server "
+            "(default comes from config)."
     )
     vllm_group.add_argument("--vllm-port", type=int, help="Port for vLLM server. Overrides config.")
     vllm_group.add_argument("--vllm-model-id", type=str, help="Model ID for vLLM server. Overrides config.")
@@ -68,13 +87,28 @@ def main():
     pipeline_group = parser.add_argument_group('Pipeline Control')
     pipeline_group.add_argument("--num-iterations", type=int, help="Number of anti-slop iterations. Overrides config.")
     pipeline_group.add_argument("--generation-max-prompts", type=int, help="Max prompts for antislop-vllm. Overrides config.")
+    pipeline_group.add_argument(
+        "--generation-step-enabled",
+        type=str2bool,
+        nargs="?",
+        const=True,
+        default=None,
+        help="true/false to execute the generation step. "
+            "(default from config)."
+    )
 
     # --- Finetuning Control ---
     finetune_group = parser.add_argument_group('DPO Finetuning Control')
     finetune_group.add_argument(
-        "--run-finetune", action=argparse.BooleanOptionalAction, default=None, # Default from config
-        help="Run DPO finetuning after pipeline. Overrides config."
+        "--run-finetune",
+        type=str2bool,
+        nargs="?",
+        const=True,
+        default=None,
+        help="true/false to run DPO finetuning after the pipeline "
+            "(default from config)."
     )
+
     finetune_group.add_argument("--finetune-base-model-id", type=str, help="Base model for DPO. Overrides config.")
     finetune_group.add_argument("--finetune-num-epochs", type=int, help="Number of epochs for DPO. Overrides config.")
 

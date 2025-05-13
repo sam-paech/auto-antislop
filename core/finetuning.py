@@ -72,59 +72,54 @@ UNSLOTH_LIBS_LOADED = False
 
 
 class LastTokenDPOTrainer(DPOTrainer):
-    """
-    DPO where each example supplies:
-      prompt_ids          – encoded prompt (no candidate token)
-      chosen_token_id     – int64 scalar
-      rejected_token_id   – int64 scalar
-    Everything else (optimizer, schedulers, logging) is inherited.
-    """
     def compute_loss(self, model, inputs, return_outputs=False):
-        prompt_ids         = inputs["prompt_ids"]          # [B, L]
-        chosen_token_id    = inputs["chosen_token_id"]     # [B]
-        rejected_token_id  = inputs["rejected_token_id"]   # [B]
+        ids           = inputs["prompt_ids"]         # [B,L]
+        mask          = inputs["attention_mask"]     # [B,L]
+        chosen_id     = inputs["chosen_token_id"]    # [B]
+        rejected_id   = inputs["rejected_token_id"]  # [B]
 
-        # forward to get hidden state at final position
-        outputs = model(prompt_ids, output_hidden_states=True, use_cache=False)
-        h_T     = outputs.hidden_states[-1][:, -1, :]                    # [B, d]
+        out   = model(ids, attention_mask=mask, output_hidden_states=True, use_cache=False)
+        last  = mask.sum(dim=1) - 1                  # index of last non-pad per example,  [B]
+        h_T   = out.hidden_states[-1][               # gather hidden state
+                   torch.arange(ids.size(0), device=ids.device),
+                   last
+               ]                                     # [B,d]
 
-        lm_head = model.lm_head
-        logits  = lm_head(h_T)                                           # [B, V]
-        logp_ch = torch.log_softmax(logits, -1).gather(                  # [B]
-                     -1, chosen_token_id.unsqueeze(-1)).squeeze(-1)
-        logp_rj = torch.log_softmax(logits, -1).gather(
-                     -1, rejected_token_id.unsqueeze(-1)).squeeze(-1)
+        logits       = model.lm_head(h_T)            # [B,V]
+        logp_good    = torch.log_softmax(logits, -1).gather(-1, chosen_id.unsqueeze(-1)).squeeze(-1)
+        logp_bad     = torch.log_softmax(logits, -1).gather(-1, rejected_id.unsqueeze(-1)).squeeze(-1)
 
         with torch.no_grad():
             ref_logits   = self.ref_model.lm_head(h_T)
-            ref_logp_ch  = torch.log_softmax(ref_logits, -1).gather(
-                              -1, chosen_token_id.unsqueeze(-1)).squeeze(-1)
-            ref_logp_rj  = torch.log_softmax(ref_logits, -1).gather(
-                              -1, rejected_token_id.unsqueeze(-1)).squeeze(-1)
+            ref_good     = torch.log_softmax(ref_logits, -1).gather(-1, chosen_id.unsqueeze(-1)).squeeze(-1)
+            ref_bad      = torch.log_softmax(ref_logits, -1).gather(-1, rejected_id.unsqueeze(-1)).squeeze(-1)
 
-        delta = (logp_ch - ref_logp_ch) - (logp_rj - ref_logp_rj)
+        delta = (logp_good - ref_good) - (logp_bad - ref_bad)
         loss  = -torch.logsigmoid(self.beta * delta).mean()
 
         return (loss, None) if not return_outputs else (loss, inputs)
 
+
 def load_tdpo_dataset(path: Path, tokenizer):
-    """Return HF Dataset with columns prompt_ids, chosen_token_id, rejected_token_id."""
     ds = load_dataset("json", data_files=str(path), split="train")
 
-    def _tokenise(ex):
-        prompt_ids = tokenizer(
+    def _tok(ex):
+        enc          = tokenizer(
             ex["context_with_chat_template"],
-            truncation=True, add_special_tokens=False
-        ).input_ids
-        chosen_id   = tokenizer(ex["chosen_decoded"],   add_special_tokens=False).input_ids[0]
-        rejected_id = tokenizer(ex["rejected_decoded"], add_special_tokens=False).input_ids[0]
+            truncation=True,
+            add_special_tokens=False,
+            return_attention_mask=True,
+            padding="max_length"   # or "longest" if you prefer
+        )
         return {
-            "prompt_ids": prompt_ids,
-            "chosen_token_id": chosen_id,
-            "rejected_token_id": rejected_id,
+            "prompt_ids":        enc.input_ids,
+            "attention_mask":    enc.attention_mask,
+            "chosen_token_id":   tokenizer(ex["chosen_decoded"],   add_special_tokens=False).input_ids[0],
+            "rejected_token_id": tokenizer(ex["rejected_decoded"], add_special_tokens=False).input_ids[0],
         }
 
-    return ds.map(_tokenise, remove_columns=ds.column_names)
+    return ds.map(_tok, remove_columns=ds.column_names)
+
 
 
 def run_dpo_finetune(config: dict, experiment_run_dir: Path):
