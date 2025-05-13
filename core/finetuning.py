@@ -72,6 +72,10 @@ UNSLOTH_LIBS_LOADED = False
 
 
 class LastTokenDPOTrainer(DPOTrainer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # keep custom columns; let compute_loss handle them
+        self.remove_unused_columns = False
     def compute_loss(self, model, inputs, return_outputs=False):
         ids           = inputs["prompt_ids"]         # [B,L]
         mask          = inputs["attention_mask"]     # [B,L]
