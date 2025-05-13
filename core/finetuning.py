@@ -317,10 +317,16 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         # turn off every ckpt flag Unsloth uses
         if hasattr(model, "gradient_checkpointing_disable"):
             model.gradient_checkpointing_disable()
+            print('gradient checkpointing disabled!')
+        if hasattr(model, "gradient_checkpointing_enable"):
+            model.gradient_checkpointing_disable()
+            print("✓ Disabled gradient checkpointing for better compilation")
         for mod in model.modules():
             if hasattr(mod, "gradient_checkpointing"):
+                print('module disabled gradient checkpointing!')
                 mod.gradient_checkpointing = False
         if hasattr(model.config, "gradient_checkpointing"):
+            print('attempting to disable gradient checkpionting in config')
             model.config.gradient_checkpointing = False
         #model = model.to(model.device)
         if False:
