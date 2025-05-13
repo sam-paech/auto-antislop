@@ -323,7 +323,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     
     if mode == "tdpo":
         # turn off checkpointing so use_cache will work
-        config['finetune_gradient_checkpointing'] = None
+        config['finetune_gradient_checkpointing'] = False
 
     model = FastLanguageModel.get_peft_model(
         model,
