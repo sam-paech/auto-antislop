@@ -324,14 +324,17 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     
     # Hard-disable gradient-checkpointing for TDPO
     if mode == "tdpo":
-        # 1. HF flag
-        if getattr(model, "gradient_checkpointing", False):
-            model.gradient_checkpointing_disable()           # HF helper
-        # 2. Unsloth compiled blocks keep their own flag
-        if hasattr(model, "model") and hasattr(model.model, "gradient_checkpointing"):
-            model.model.gradient_checkpointing = False
-        if hasattr(model.config, "gradient_checkpointing"):
-            model.config.gradient_checkpointing = False
+        model.config._attn_implementation = "flash_attention_2"
+        model = model.to(model.device)
+        if False:
+            # 1. HF flag
+            if getattr(model, "gradient_checkpointing", False):
+                model.gradient_checkpointing_disable()           # HF helper
+            # 2. Unsloth compiled blocks keep their own flag
+            if hasattr(model, "model") and hasattr(model.model, "gradient_checkpointing"):
+                model.model.gradient_checkpointing = False
+            if hasattr(model.config, "gradient_checkpointing"):
+                model.config.gradient_checkpointing = False
 
     model = FastLanguageModel.get_peft_model(
         model,
