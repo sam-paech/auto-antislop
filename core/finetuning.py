@@ -310,6 +310,14 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     # Hard-disable gradient-checkpointing for TDPO
     if mode == "tdpo":
         model.config._attn_implementation = "flash_attention_2"
+        # turn off every ckpt flag Unsloth uses
+        if hasattr(model, "gradient_checkpointing_disable"):
+            model.gradient_checkpointing_disable()
+        for mod in model.modules():
+            if hasattr(mod, "gradient_checkpointing"):
+                mod.gradient_checkpointing = False
+        if hasattr(model.config, "gradient_checkpointing"):
+            model.config.gradient_checkpointing = False
         #model = model.to(model.device)
         if False:
             # 1. HF flag
@@ -332,6 +340,17 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         random_state=3407,
         max_seq_length=max_seq_length,
     )
+
+    if mode == "tdpo":
+        model.config._attn_implementation = "flash_attention_2"
+        # turn off every ckpt flag Unsloth uses
+        if hasattr(model, "gradient_checkpointing_disable"):
+            model.gradient_checkpointing_disable()
+        for mod in model.modules():
+            if hasattr(mod, "gradient_checkpointing"):
+                mod.gradient_checkpointing = False
+        if hasattr(model.config, "gradient_checkpointing"):
+            model.config.gradient_checkpointing = False
 
     
 
