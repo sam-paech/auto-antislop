@@ -153,16 +153,17 @@ class LastTokenDPOTrainer(DPOTrainer):
         chosen   = torch.tensor(inputs["chosen_token_id"],   device=model.device)
         rejected = torch.tensor(inputs["rejected_token_id"], device=model.device)
 
-        B, L = ids.shape                         # batch, length
-        attn_mask = torch.zeros(                 # all-zero ⇒ no positions masked
-            (B, L), dtype=torch.uint8,           # bool also works, uint8 cheapest
-            device=ids.device)
+        B, L = ids.shape
+        H     = model.config.num_attention_heads       # 4 for Gemma-3B
+
+        # bool keeps it tiny: 1 bit per entry (stored as 1 byte on GPU)
+        attn_mask = torch.zeros((B, H, L, L), dtype=torch.bool, device=ids.device)
 
         out = model(
                 ids,
                 attention_mask = attn_mask,
                 use_cache      = False,
-                output_hidden_states = False)
+                output_hidden_states = True)
         logits_last = out.logits[:, -1, :]                # [B,V]
 
         logp_good = F.log_softmax(logits_last, -1).gather(
