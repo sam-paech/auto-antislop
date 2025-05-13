@@ -131,36 +131,47 @@ class LastTokenDPOTrainer(DPOTrainer):
                     rejected_token_id=rejected)
 
     # ----------------------------------------------------------
-    def compute_loss(self, model, inputs, return_outputs=False, **_):
-        ids      = inputs["prompt_ids"].to(model.device)
-        attn     = inputs["attention_mask"].to(model.device)       # ➋ tensor, not None
-        chosen   = inputs["chosen_token_id"].to(model.device)
-        rejected = inputs["rejected_token_id"].to(model.device)
+        def compute_loss(self, model, inputs, return_outputs=False, **_):
+        ids      = inputs["prompt_ids"].to(model.device)          # [B, L]
+        attn     = inputs["attention_mask"].to(model.device)      # [B, L]
+        chosen   = inputs["chosen_token_id"].to(model.device)     # [B]
+        rejected = inputs["rejected_token_id"].to(model.device)   # [B]
 
+        # ── policy forward ──────────────────────────────────────────────
         out = model(ids,
-                    attention_mask=attn,   # <- fixes NoneType .to() crash
+                    attention_mask=attn,           # 2-D pad-mask, cheap
                     use_cache=False,
                     output_hidden_states=True)
 
-        last_index = attn.sum(1) - 1
+        last_index  = attn.sum(1) - 1                              # [B]
         logits_last = out.logits[torch.arange(ids.size(0), device=model.device),
-                                 last_index, :]
+                                 last_index, :]                   # [B, V]
 
         logp_good = F.log_softmax(logits_last, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
         logp_bad  = F.log_softmax(logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
 
+        # ── reference forward ──────────────────────────────────────────
         with torch.no_grad():
             tokens_last = ids[torch.arange(ids.size(0), device=model.device), last_index]
-            ref_logits = self.ref_model.lm_head(model.get_input_embeddings()(tokens_last))
+
+            if self.ref_model is None:
+                # use the base model with LoRA adapters *disabled*
+                with self.null_ref_context():
+                    ref_logits = model.lm_head(model.get_input_embeddings()(tokens_last))
+            else:
+                ref_logits = self.ref_model.lm_head(model.get_input_embeddings()(tokens_last))
+
             ref_good = F.log_softmax(ref_logits, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
             ref_bad  = F.log_softmax(ref_logits, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
 
+        # ── DPO scalar loss ────────────────────────────────────────────
         delta = (logp_good - ref_good) - (logp_bad - ref_bad)
         loss  = -F.logsigmoid(self.beta * delta).mean()
 
         if return_outputs:
             return loss, {"chosen_wins": (delta > 0).float().mean().detach()}
         return loss
+
 
     # ----------------------------------------------------------
     def _prepare_dataset(self, dataset, *args, **_):
