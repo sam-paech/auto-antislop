@@ -99,59 +99,65 @@ class LastTokenDPOTrainer(DPOTrainer):
         model,
         inputs,
         return_outputs: bool = False,
-        **kwargs,                               # swallow num_items_in_batch, etc.
+        **kwargs,                      # swallows num_items_in_batch etc.
     ):
         """
-        Memory-light single-token DPO loss.
-
-        Batch keys:
-        prompt_ids, attention_mask (lists of ints)
-        chosen_token_id, rejected_token_id    (ints)
+        Two-stage TDPO loss:
+        1. run prompt (L-1 tokens) in no-grad, cache KV
+        2. run final token with grad, compute logits
         """
-        # 1.  Convert & pad ------------------------------------------------------
-        ids_list = [torch.tensor(x, dtype=torch.long, device=model.device)
+        # ------------- unpack & tensorise ---------------------------------
+        device = model.device
+        ids_full = [torch.as_tensor(x, dtype=torch.long, device=device)
                     for x in inputs["prompt_ids"]]
-        lens = torch.tensor([len(x) for x in ids_list], device=model.device)
-
-        ids = pad_sequence(
-            ids_list,
-            batch_first=True,
+        # batch size 1 by design; unsqueeze for safety
+        ids_full = torch.nn.utils.rnn.pad_sequence(
+            ids_full, batch_first=True,
             padding_value=model.config.pad_token_id,
         )
-        attn = (ids != model.config.pad_token_id).long()          # fresh mask
+        last_token = ids_full[:, -1:]                # [B,1]
+        prompt_ids = ids_full[:, :-1]                # [B,L-1]
+        prompt_mask = (prompt_ids != model.config.pad_token_id).long()
+        chosen_id   = torch.as_tensor(inputs["chosen_token_id"],
+                                    dtype=torch.long, device=device)
+        rejected_id = torch.as_tensor(inputs["rejected_token_id"],
+                                    dtype=torch.long, device=device)
 
-        chosen = torch.tensor(inputs["chosen_token_id"],
-                            dtype=torch.long, device=model.device)
-        rejected = torch.tensor(inputs["rejected_token_id"],
-                                dtype=torch.long, device=model.device)
-
-        # 2. Forward pass (no hidden states, no cache) ---------------------------
-        out = model(ids, attention_mask=attn, use_cache=False)
-        last_logits = out.logits[:, -1, :]                        # [B, V]
-
-        logp_good = F.log_softmax(last_logits, -1).gather(
-            -1, chosen.unsqueeze(-1)).squeeze(-1)
-        logp_bad = F.log_softmax(last_logits, -1).gather(
-            -1, rejected.unsqueeze(-1)).squeeze(-1)
-
+        # ------------- 1) prompt forward, no grad -------------------------
         with torch.no_grad():
-            ref_logits = self.ref_model.lm_head(                  # one layer call
-                out.hidden_states[-1][:, -1, :]                  # hidden of last token
-            ) if hasattr(out, "hidden_states") else self.ref_model.lm_head(
-                model.get_input_embeddings()(ids[:, -1])         # fallback path
-            )
+            past = model(
+                prompt_ids,
+                attention_mask=prompt_mask,
+                use_cache=True,
+            ).past_key_values                                # tuple of tuples
+
+        # ------------- 2) final-token forward with grad -------------------
+        out = model(
+            last_token,
+            attention_mask=None,         # causal mask is implicit with KV cache
+            past_key_values=past,
+            use_cache=False,
+        )
+        logits_last = out.logits.squeeze(1)                 # [B,V]
+
+        logp_good = F.log_softmax(logits_last, -1).gather(
+            -1, chosen_id.unsqueeze(-1)).squeeze(-1)
+        logp_bad  = F.log_softmax(logits_last, -1).gather(
+            -1, rejected_id.unsqueeze(-1)).squeeze(-1)
+
+        # ------- reference model (share same hidden via lm_head) ----------
+        with torch.no_grad():
+            ref_logits = self.ref_model.lm_head(out.hidden_states[-1].squeeze(1))
             ref_good = F.log_softmax(ref_logits, -1).gather(
-                -1, chosen.unsqueeze(-1)).squeeze(-1)
+                -1, chosen_id.unsqueeze(-1)).squeeze(-1)
             ref_bad = F.log_softmax(ref_logits, -1).gather(
-                -1, rejected.unsqueeze(-1)).squeeze(-1)
+                -1, rejected_id.unsqueeze(-1)).squeeze(-1)
 
-        # 3. DPO objective -------------------------------------------------------
+        # ----------------- DPO single-token objective ---------------------
         delta = (logp_good - ref_good) - (logp_bad - ref_bad)
-        loss = -F.logsigmoid(self.beta * delta).mean()
+        loss  = -F.logsigmoid(self.beta * delta).mean()
 
-        # 4. Stats for progress bar / tensorboard --------------------------------
         stats = {"chosen_wins": (delta > 0).float().mean().detach()}
-
         return (loss, stats) if return_outputs else loss
     
     def _prepare_dataset(
