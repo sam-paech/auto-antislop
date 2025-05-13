@@ -98,6 +98,22 @@ class LastTokenDPOTrainer(DPOTrainer):
         loss  = -torch.logsigmoid(self.beta * delta).mean()
 
         return (loss, None) if not return_outputs else (loss, inputs)
+    
+    def _prepare_dataset(
+        self,
+        dataset,
+        processing_class=None,
+        args=None,
+        split="train",
+    ):
+        """
+        Bypass DPOTrainer's default preprocessing, which expects
+        'prompt'/'chosen'/'rejected' columns.  Our TDPO dataset is already
+        tokenised and has columns:
+          prompt_ids, attention_mask, chosen_token_id, rejected_token_id
+        So we simply return it unchanged.
+        """
+        return dataset
 
 
 def load_tdpo_dataset(path: Path, tokenizer):
