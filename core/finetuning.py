@@ -320,6 +320,10 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     except Exception as e:
         logger.error(f"Failed to load base model '{model_name}' or tokenizer for DPO: {e}", exc_info=True)
         return
+    
+    if mode == "tdpo":
+        # turn off checkpointing so use_cache will work
+        config['finetune_gradient_checkpointing'] = None
 
     model = FastLanguageModel.get_peft_model(
         model,
