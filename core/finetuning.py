@@ -1,5 +1,24 @@
 import logging
 logger = logging.getLogger(__name__)
+
+import torch.nn.functional as F
+
+# keep original
+_orig_sdpa = F.scaled_dot_product_attention
+
+def _sdpa_mask_ok(q, k, v, attn_mask=None, *args, **kw):
+    """
+    If the mask is 4-D (B, h, Lq, Lk) we forward it unchanged.
+    For every other shape – the 2-D mask that Unsloth composes or
+    the None case – we drop it so flash-attn uses its own causal bias.
+    """
+    good_mask = attn_mask is not None and attn_mask.dim() == 4
+    return _orig_sdpa(q, k, v,
+                      attn_mask = attn_mask if good_mask else None,
+                      *args, **kw)
+
+F.scaled_dot_product_attention = _sdpa_mask_ok
+
 # --- Attempt to import Unsloth and related libraries only when this function is called ---
 #if not UNSLOTH_LIBS_LOADED:
 try:
@@ -31,11 +50,6 @@ except ImportError as e:
 #    logger.error("Unsloth libraries are not available. Aborting DPO finetuning.")
 #    return
 
-import unsloth_zoo.temporary_patches as _tp
-_old = _tp.scaled_dot_product_attention
-def _wrapped_sdpa(*a, attn_mask=None, **kw):
-    return _old(*a, attn_mask=attn_mask if attn_mask is not None else None, **kw)
-_tp.scaled_dot_product_attention = _wrapped_sdpa
 
 import os
 import torch # Keep torch as it might be used for GPU checks earlier if needed
