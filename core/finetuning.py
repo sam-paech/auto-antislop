@@ -131,7 +131,7 @@ class LastTokenDPOTrainer(DPOTrainer):
                     rejected_token_id=rejected)
 
     # ----------------------------------------------------------
-        def compute_loss(self, model, inputs, return_outputs=False, **_):
+    def compute_loss(self, model, inputs, return_outputs=False, **_):
         ids      = inputs["prompt_ids"].to(model.device)          # [B, L]
         attn     = inputs["attention_mask"].to(model.device)      # [B, L]
         chosen   = inputs["chosen_token_id"].to(model.device)     # [B]
