@@ -7,6 +7,8 @@ from typing import Optional
 from trl import DPOTrainer
 from datasets import load_dataset
 from torch.utils.data import default_collate
+import torch.nn.functional as F
+from torch.nn.utils.rnn import pad_sequence
 
 logger = logging.getLogger(__name__)
 
@@ -97,58 +99,66 @@ class LastTokenDPOTrainer(DPOTrainer):
         model,
         inputs,
         return_outputs: bool = False,
-        **kwargs,                               # swallows num_items_in_batch, etc.
+        **kwargs,                             # swallows num_items_in_batch, etc.
     ):
-        """
-        Expected batch keys (all on the same device):
-        prompt_ids         – LongTensor [B, L]   padded on the right
-        attention_mask     – LongTensor [B, L]   1 = token, 0 = pad
-        chosen_token_id    – LongTensor [B]      single id per example
-        rejected_token_id  – LongTensor [B]      single id per example
-        """
-        # --- make sure everything is a tensor ---------------------------------
-        def as_tensor(x):                           # handles list → tensor
-            return x if torch.is_tensor(x) else torch.tensor(x, device=model.device)
+        # ------------------------------------------------------------------
+        # 1. Convert lists to tensors & dynamic-pad to longest in batch
+        # ------------------------------------------------------------------
+        prompt_ids = [torch.tensor(x, dtype=torch.long, device=model.device)
+                    for x in inputs["prompt_ids"]]
+        lens       = torch.tensor([len(x) for x in prompt_ids], device=model.device)
+        ids        = pad_sequence(prompt_ids, batch_first=True, padding_value=model.config.pad_token_id)
+        # No attention_mask → model will use causal mask internally, but
+        # skips the gigantic 4-D mask because we set use_cache=True below.
+        attention_mask = None
 
-        ids         = as_tensor(inputs["prompt_ids"]).to(model.device)
-        mask        = as_tensor(inputs["attention_mask"]).to(model.device)
-        chosen_id   = as_tensor(inputs["chosen_token_id"]).to(model.device)
-        rejected_id = as_tensor(inputs["rejected_token_id"]).to(model.device)
+        chosen_id   = torch.tensor(inputs["chosen_token_id"],
+                                dtype=torch.long, device=model.device)
+        rejected_id = torch.tensor(inputs["rejected_token_id"],
+                                dtype=torch.long, device=model.device)
 
-        # --- forward & gather last hidden state --------------------------------
+        # ------------------------------------------------------------------
+        # 2. Forward pass — use_cache=True avoids big causal mask
+        # ------------------------------------------------------------------
         outputs = model(
             ids,
-            attention_mask=mask,
+            attention_mask=attention_mask,
             output_hidden_states=True,
-            use_cache=False,
+            use_cache=True,                   # crucial to keep memory low
         )
-        last_idx = mask.sum(dim=1) - 1                       # [B]
+        # gather last hidden state per example
         h_T = outputs.hidden_states[-1][
             torch.arange(ids.size(0), device=ids.device),
-            last_idx,
-        ]                                                     # [B, d]
+            lens - 1
+        ]                                      # [B, d]
 
-        # --- logits & log-probs -------------------------------------------------
-        logits      = model.lm_head(h_T)                     # [B, V]
+        # ------------------------------------------------------------------
+        # 3. Log-probs for the two candidate tokens
+        # ------------------------------------------------------------------
+        logits      = model.lm_head(h_T)                        # [B, V]
         logp_good   = F.log_softmax(logits, -1).gather(
-            -1, chosen_id.unsqueeze(-1)).squeeze(-1)         # [B]
+                        -1, chosen_id.unsqueeze(-1)).squeeze(-1)
         logp_bad    = F.log_softmax(logits, -1).gather(
-            -1, rejected_id.unsqueeze(-1)).squeeze(-1)       # [B]
+                        -1, rejected_id.unsqueeze(-1)).squeeze(-1)
 
         with torch.no_grad():
             ref_logits = self.ref_model.lm_head(h_T)
             ref_good   = F.log_softmax(ref_logits, -1).gather(
-                -1, chosen_id.unsqueeze(-1)).squeeze(-1)
+                            -1, chosen_id.unsqueeze(-1)).squeeze(-1)
             ref_bad    = F.log_softmax(ref_logits, -1).gather(
-                -1, rejected_id.unsqueeze(-1)).squeeze(-1)
+                            -1, rejected_id.unsqueeze(-1)).squeeze(-1)
 
-        # --- DPO single-token objective ----------------------------------------
+        # ------------------------------------------------------------------
+        # 4. Single-token DPO objective
+        # ------------------------------------------------------------------
         delta = (logp_good - ref_good) - (logp_bad - ref_bad)    # [B]
         loss  = -F.logsigmoid(self.beta * delta).mean()
 
-        # --- metrics for the trainer logger ------------------------------------
-        chosen_win = (delta > 0).float().mean()                 # scalar tensor
-        stats = {"loss": loss.detach(), "chosen_wins": chosen_win}
+        # ------------------------------------------------------------------
+        # 5. Metrics for logging
+        # ------------------------------------------------------------------
+        chosen_win = (delta > 0).float().mean()
+        stats = {"chosen_wins": chosen_win.detach()}
 
         return (loss, stats) if return_outputs else loss
     
