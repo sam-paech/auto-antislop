@@ -309,6 +309,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     # --- Model and Tokenizer Setup ---    
     max_seq_length = config['finetune_max_seq_length']
     
+    
     try:
         model, _ = FastLanguageModel.from_pretrained(
             model_name=model_name,
@@ -321,9 +322,16 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         logger.error(f"Failed to load base model '{model_name}' or tokenizer for DPO: {e}", exc_info=True)
         return
     
+    # Hard-disable gradient-checkpointing for TDPO
     if mode == "tdpo":
-        # turn off checkpointing so use_cache will work
-        config['finetune_gradient_checkpointing'] = False
+        # 1. HF flag
+        if getattr(model, "gradient_checkpointing", False):
+            model.gradient_checkpointing_disable()           # HF helper
+        # 2. Unsloth compiled blocks keep their own flag
+        if hasattr(model, "model") and hasattr(model.model, "gradient_checkpointing"):
+            model.model.gradient_checkpointing = False
+        if hasattr(model.config, "gradient_checkpointing"):
+            model.config.gradient_checkpointing = False
 
     model = FastLanguageModel.get_peft_model(
         model,
