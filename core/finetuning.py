@@ -158,6 +158,9 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     logger.info("Starting DPO finetuning process...")
 
+    model_name = config['finetune_base_model_id']
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+
     if config['finetune_chat_template']:
         tokenizer = get_chat_template(
             tokenizer,
@@ -209,8 +212,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     logger.info(f"DPO dataset ready with {after_len} samples.")
 
 
-    # --- Model and Tokenizer Setup ---
-    model_name = config['finetune_base_model_id']
+    # --- Model and Tokenizer Setup ---    
     max_seq_length = config['finetune_max_seq_length']
     
     try:
@@ -220,7 +222,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             load_in_4bit=config['finetune_load_in_4bit'],
             dtype=torch.bfloat16 if config['finetune_load_in_4bit'] and torch.cuda.is_bf16_supported() else None,
         )
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        
     except Exception as e:
         logger.error(f"Failed to load base model '{model_name}' or tokenizer for DPO: {e}", exc_info=True)
         return
