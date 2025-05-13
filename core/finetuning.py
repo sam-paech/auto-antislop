@@ -108,61 +108,47 @@ UNSLOTH_LIBS_LOADED = False
 
 
 class LastTokenDPOTrainer(DPOTrainer):
-    """
-    Exactly like TRL’s DPOTrainer, but the loss looks only at the first
-    diverging token in each preference pair.
-    """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.remove_unused_columns = False
-        self.data_collator = self.tdpo_collator   # override default collator
+        self.data_collator = self.tdpo_collator
 
     # ----------------------------------------------------------
     def tdpo_collator(self, features):
-        """
-        Build a batch:
-            prompt_ids        : [B, L] padded
-            attention_mask    : [B, L] 1=token, 0=pad
-            chosen_token_id   : [B]
-            rejected_token_id : [B]
-        """
-        pad_id = self.padding_value               # set by the parent DPOTrainer
+        pad_id = self.padding_value                     # comes from parent
 
         prompt_tensors = [torch.tensor(f["prompt_ids"]) for f in features]
         prompt_ids = pad_sequence(prompt_tensors, batch_first=True,
-                                  padding_value=pad_id)          # [B, L]
-        attention_mask = (prompt_ids != pad_id).long()            # [B, L]
+                                  padding_value=pad_id)           # [B, L]
+        attention_mask = (prompt_ids != pad_id)                    # ➊ bool tensor
 
         chosen   = torch.tensor([f["chosen_token_id"]   for f in features])
         rejected = torch.tensor([f["rejected_token_id"] for f in features])
 
-        return {
-            "prompt_ids": prompt_ids,
-            "attention_mask": attention_mask,
-            "chosen_token_id": chosen,
-            "rejected_token_id": rejected,
-        }
+        return dict(prompt_ids=prompt_ids,
+                    attention_mask=attention_mask,
+                    chosen_token_id=chosen,
+                    rejected_token_id=rejected)
 
     # ----------------------------------------------------------
     def compute_loss(self, model, inputs, return_outputs=False, **_):
-        ids      = inputs["prompt_ids"].to(model.device)          # [B, L]
-        attn     = inputs["attention_mask"].to(model.device)      # [B, L]
-        chosen   = inputs["chosen_token_id"].to(model.device)     # [B]
-        rejected = inputs["rejected_token_id"].to(model.device)   # [B]
+        ids      = inputs["prompt_ids"].to(model.device)
+        attn     = inputs["attention_mask"].to(model.device)       # ➋ tensor, not None
+        chosen   = inputs["chosen_token_id"].to(model.device)
+        rejected = inputs["rejected_token_id"].to(model.device)
 
-        # Forward pass – no explicit mask; Flash-Attn handles causal masking
-        out = model(ids, attention_mask=None,
-                    use_cache=False, output_hidden_states=True)
+        out = model(ids,
+                    attention_mask=attn,   # <- fixes NoneType .to() crash
+                    use_cache=False,
+                    output_hidden_states=True)
 
-        # Logits at the true last token of each prompt
-        last_index = attn.sum(1) - 1                              # [B]
+        last_index = attn.sum(1) - 1
         logits_last = out.logits[torch.arange(ids.size(0), device=model.device),
-                                 last_index, :]                   # [B, V]
+                                 last_index, :]
 
         logp_good = F.log_softmax(logits_last, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
         logp_bad  = F.log_softmax(logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
 
-        # Reference model (frozen)
         with torch.no_grad():
             tokens_last = ids[torch.arange(ids.size(0), device=model.device), last_index]
             ref_logits = self.ref_model.lm_head(model.get_input_embeddings()(tokens_last))
@@ -173,13 +159,11 @@ class LastTokenDPOTrainer(DPOTrainer):
         loss  = -F.logsigmoid(self.beta * delta).mean()
 
         if return_outputs:
-            stats = {"chosen_wins": (delta > 0).float().mean().detach()}
-            return loss, stats
+            return loss, {"chosen_wins": (delta > 0).float().mean().detach()}
         return loss
 
     # ----------------------------------------------------------
     def _prepare_dataset(self, dataset, *args, **_):
-        # TDPO dataset is already tokenised; leave unchanged
         return dataset
 
 
