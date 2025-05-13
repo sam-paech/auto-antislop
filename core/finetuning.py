@@ -92,7 +92,13 @@ class LastTokenDPOTrainer(DPOTrainer):
                   "chosen_token_id", "rejected_token_id"):
             batch[k] = default_collate([f[k] for f in features])
         return batch
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(
+        self,
+        model,
+        inputs,
+        return_outputs: bool = False,
+        **kwargs                # ← swallow num_items_in_batch or anything else
+    ):
         ids           = inputs["prompt_ids"]         # [B,L]
         mask          = inputs["attention_mask"]     # [B,L]
         chosen_id     = inputs["chosen_token_id"]    # [B]
