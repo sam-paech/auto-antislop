@@ -493,6 +493,49 @@ def load_tdpo_dataset(
     return ds
 
 
+# ------------------------------------------------------------------
+# freeze_early_layers(model, n_unfrozen=4)
+# ------------------------------------------------------------------
+# Keeps the top `n_unfrozen` transformer blocks (closest to the output)
+# trainable; all earlier blocks have requires_grad=False.
+# Works for Unsloth Gemma / Llama / Mixtral style models.
+# ------------------------------------------------------------------
+def freeze_early_layers(model, n_unfrozen: int = 4, verbose: bool = True):
+    """
+    Freeze the bottom part of the transformer trunk.
+
+    Args:
+        model        : a `FastLanguageModel` or HF `PreTrainedModel`
+        n_unfrozen   : how many *last* blocks to keep trainable
+        verbose      : print what’s being frozen
+    """
+    # locate the list that holds the block modules
+    block_list = None
+    for attr in ["model.layers", "model.decoder.layers", "layers"]:
+        ptr = model
+        good = True
+        for name in attr.split("."):
+            if not hasattr(ptr, name):
+                good = False
+                break
+            ptr = getattr(ptr, name)
+        if good and isinstance(ptr, (list, torch.nn.ModuleList)):
+            block_list = ptr
+            break
+
+    if block_list is None:
+        raise RuntimeError("Could not locate transformer layers list")
+
+    total = len(block_list)
+    cut   = total - n_unfrozen
+    if verbose:
+        print(f"Freezing layers 0 … {cut-1} of {total} (keeping {n_unfrozen}).")
+
+    # freeze parameters in the lower blocks
+    for i, block in enumerate(block_list):
+        if i < cut:
+            block.requires_grad_(False)
+
 
 
 def run_dpo_finetune(config: dict, experiment_run_dir: Path):
@@ -639,7 +682,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         if hasattr(model.config, "gradient_checkpointing"):
             model.config.gradient_checkpointing = False
 
-    
+
+    freeze_early_layers(model, n_unfrozen = 4, verbose = True)
 
 
     # --- DPO Trainer Setup ---
@@ -656,16 +700,6 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         # else: fp16 might be an option if not 4-bit, but 4-bit usually goes with bf16 or no explicit fp16/bf16
     # else if not 4-bit, user could specify fp16 in config if desired.
     # For simplicity, this example prioritizes bf16 with 4-bit.
-
-    # freeze everything except last 4 transformer blocks
-    freeze_until = model.config.num_hidden_layers - 4
-    for name, module in model.named_modules():
-        if name.startswith("language_model.model.layers."):
-            idx = int(name.split('.')[3])
-            if idx < freeze_until:
-                for p in module.parameters():
-                    p.requires_grad_(False)
-
 
 
     TrainerClass = LastTokenDPOTrainer if mode == "tdpo" else DPOTrainer
