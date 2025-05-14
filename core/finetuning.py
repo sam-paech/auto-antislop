@@ -108,69 +108,100 @@ UNSLOTH_LIBS_LOADED = False
 
 
 class LastTokenDPOTrainer(DPOTrainer):
+    """
+    Trainer for “single-next-token” (TDPO) preference learning.
+    Replaces TRL’s standard loss with a log-ratio on the **last**
+    autoregressive position and stays agnostic to model head names.
+    """
+
+    # ──────────────────────────────────────────────────────────────
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.remove_unused_columns = False
-        self.data_collator = self.tdpo_collator
+        self.data_collator = self.tdpo_collator                    # override
 
-    # ----------------------------------------------------------
+    # ──────────────────────────────────────────────────────────────
+    @staticmethod
+    def _get_proj(model):
+        """
+        Return the output-projection module in a model-agnostic way.
+        Falls back to `lm_head` if `get_output_embeddings()` is None.
+        """
+        proj = model.get_output_embeddings()
+        if proj is None:
+            proj = getattr(model, "lm_head", None)
+        if proj is None:
+            raise AttributeError(
+                "Model lacks both get_output_embeddings() and lm_head."
+            )
+        return proj
+
+    # ──────────────────────────────────────────────────────────────
     def tdpo_collator(self, features):
-        pad_id = self.padding_value                     # comes from parent
+        pad_id = self.padding_value
 
         prompt_tensors = [torch.tensor(f["prompt_ids"]) for f in features]
         prompt_ids = pad_sequence(prompt_tensors, batch_first=True,
                                   padding_value=pad_id)           # [B, L]
-        attention_mask = (prompt_ids != pad_id)                    # ➊ bool tensor
+        attention_mask = prompt_ids.ne(pad_id)                     # bool
 
         chosen   = torch.tensor([f["chosen_token_id"]   for f in features])
         rejected = torch.tensor([f["rejected_token_id"] for f in features])
 
-        return dict(prompt_ids=prompt_ids,
-                    attention_mask=attention_mask,
-                    chosen_token_id=chosen,
-                    rejected_token_id=rejected)
+        return {
+            "prompt_ids": prompt_ids,
+            "attention_mask": attention_mask,
+            "chosen_token_id": chosen,
+            "rejected_token_id": rejected,
+        }
 
-    # ----------------------------------------------------------
+    # ──────────────────────────────────────────────────────────────
     def compute_loss(self, model, inputs, return_outputs=False, **_):
-        ids      = inputs["prompt_ids"].to(model.device)          # [B, L]
-        attn     = inputs["attention_mask"].to(model.device)      # [B, L]
-        chosen   = inputs["chosen_token_id"].to(model.device)     # [B]
-        rejected = inputs["rejected_token_id"].to(model.device)   # [B]
+        ids      = inputs["prompt_ids"].to(model.device)           # [B, L]
+        attn     = inputs["attention_mask"].to(model.device)       # [B, L]
+        chosen   = inputs["chosen_token_id"].to(model.device)      # [B]
+        rejected = inputs["rejected_token_id"].to(model.device)    # [B]
 
-        # ── policy forward ──────────────────────────────────────────────
-        out = model(ids,
-                    attention_mask=attn,           # 2-D pad-mask, cheap
-                    use_cache=False,
-                    output_hidden_states=True)
+        # ── policy forward ───────────────────────────────────────
+        out = model(ids, attention_mask=attn,
+                    use_cache=False, output_hidden_states=False)
 
         last_index  = attn.sum(1) - 1                              # [B]
-        logits_last = out.logits[torch.arange(ids.size(0), device=model.device),
-                                 last_index, :]                   # [B, V]
+        logits_last = out.logits[torch.arange(ids.size(0),
+                                              device=model.device),
+                                 last_index]                       # [B, V]
 
-        logp_good = F.log_softmax(logits_last, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
-        logp_bad  = F.log_softmax(logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
+        logp_good = F.log_softmax(logits_last, -1).gather(-1,
+                     chosen.unsqueeze(-1)).squeeze(-1)
+        logp_bad  = F.log_softmax(logits_last, -1).gather(-1,
+                     rejected.unsqueeze(-1)).squeeze(-1)
 
-        # ── reference forward ──────────────────────────────────────────
+        # ── reference forward ────────────────────────────────────
         with torch.no_grad():
-            tokens_last = ids[torch.arange(ids.size(0), device=model.device), last_index]
+            tokens_last = ids[torch.arange(ids.size(0),
+                                           device=model.device),
+                               last_index]                         # [B]
 
-            if self.ref_model is None:
-                # use the base model with LoRA adapters *disabled*
-                with self.null_ref_context():
-                    ref_logits = model.lm_head(model.get_input_embeddings()(tokens_last))
-            else:
-                ref_logits = self.ref_model.lm_head(model.get_input_embeddings()(tokens_last))
+            proj_ref = (self._get_proj(model)                      # null-ref
+                        if self.ref_model is None
+                        else self._get_proj(self.ref_model))
 
-            ref_good = F.log_softmax(ref_logits, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
-            ref_bad  = F.log_softmax(ref_logits, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
+            emb = model.get_input_embeddings()(tokens_last)        # [B, D]
+            ref_logits = proj_ref(emb)                             # [B, V]
 
-        # ── DPO scalar loss ────────────────────────────────────────────
+            ref_good = F.log_softmax(ref_logits, -1).gather(-1,
+                       chosen.unsqueeze(-1)).squeeze(-1)
+            ref_bad  = F.log_softmax(ref_logits, -1).gather(-1,
+                       rejected.unsqueeze(-1)).squeeze(-1)
+
+        # ── DPO scalar loss ──────────────────────────────────────
         delta = (logp_good - ref_good) - (logp_bad - ref_bad)
         loss  = -F.logsigmoid(self.beta * delta).mean()
 
         if return_outputs:
             return loss, {"chosen_wins": (delta > 0).float().mean().detach()}
         return loss
+
 
 
     # ----------------------------------------------------------
