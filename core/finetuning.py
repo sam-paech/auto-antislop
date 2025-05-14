@@ -239,6 +239,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     # ── Select dataset path according to finetune_mode ───────────────────
     mode = config.get("finetune_mode", "dpo").lower()   # expect "dpo" or "tdpo"
     dataset_path = None
+    # --- Model and Tokenizer Setup ---    
+    max_seq_length = config['finetune_max_seq_length']
 
     if mode == "dpo":
         # full-sequence preference pairs
@@ -285,22 +287,19 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
         # defer actual loading until tokenizer is ready
         tdpo_dataset_path = dataset_path
-        dpo_dataset_hf = load_tdpo_dataset(tdpo_dataset_path, tokenizer)
+        dpo_dataset_hf = load_tdpo_dataset(tdpo_dataset_path, tokenizer, max_seq_len=max_seq_length)
 
     else:
         logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'tdpo'.")
         return
 
-
-
-    # --- Model and Tokenizer Setup ---    
-    max_seq_length = config['finetune_max_seq_length']
+    
     
     
     try:
         model, _ = FastLanguageModel.from_pretrained(
             model_name=model_name,
-            max_seq_length=4096,
+            max_seq_length=max_seq_length,
             load_in_4bit=config['finetune_load_in_4bit'],
             dtype=torch.bfloat16 if config['finetune_load_in_4bit'] and torch.cuda.is_bf16_supported() else None,
         )
@@ -395,8 +394,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             optim="adamw_8bit",
             seed=42,
             output_dir=str(finetune_output_dir),
-            max_length=4096,
-            max_prompt_length=4096 // 2,
+            max_length=max_seq_length,
+            max_prompt_length=max_seq_length // 2,
             beta=config['finetune_beta'],
             report_to="tensorboard", # Changed to tensorboard for local runs
             lr_scheduler_type="linear",
