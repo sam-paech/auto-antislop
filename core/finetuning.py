@@ -178,21 +178,20 @@ class LastTokenDPOTrainer(DPOTrainer):
 
         # ── reference forward ────────────────────────────────────
         with torch.no_grad():
-            tokens_last = ids[torch.arange(ids.size(0),
-                                           device=model.device),
-                               last_index]                         # [B]
+            if self.ref_model is None:
+                # temporarily disable adapters to get base model behaviour
+                with self.null_ref_context():
+                    ref_out = model(ids, attention_mask=attn, use_cache=False)
+            else:
+                ref_out = self.ref_model(ids, attention_mask=attn, use_cache=False)
 
-            proj_ref = (self._get_proj(model)                      # null-ref
-                        if self.ref_model is None
-                        else self._get_proj(self.ref_model))
+            ref_logits_last = ref_out.logits[torch.arange(ids.size(0), device=model.device),
+                                            last_index]   # [B, V]
 
-            emb = model.get_input_embeddings()(tokens_last)        # [B, D]
-            ref_logits = proj_ref(emb)                             # [B, V]
-
-            ref_good = F.log_softmax(ref_logits, -1).gather(-1,
-                       chosen.unsqueeze(-1)).squeeze(-1)
-            ref_bad  = F.log_softmax(ref_logits, -1).gather(-1,
-                       rejected.unsqueeze(-1)).squeeze(-1)
+            ref_good = F.log_softmax(ref_logits_last, -1).gather(-1,
+                    chosen.unsqueeze(-1)).squeeze(-1)
+            ref_bad  = F.log_softmax(ref_logits_last, -1).gather(-1,
+                    rejected.unsqueeze(-1)).squeeze(-1)
 
         # ── DPO scalar loss ──────────────────────────────────────
         delta = (logp_good - ref_good) - (logp_bad - ref_bad)
