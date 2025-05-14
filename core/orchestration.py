@@ -164,7 +164,7 @@ def run_generation_script_wrapper(
     banned_ngrams_file_path: Optional[Path] = None,
     slop_phrases_file_path: Optional[Path] = None,
     regex_blocklist_file_path: Optional[Path] = None,
-    extra_generation_args: Optional[list[str]] = None,  # NEW
+    extra_generation_args: Optional[list[str]] = None,
 ) -> None:
     """
     Execute antislop-vllm/main.py for a single iteration, handling all paths,
@@ -376,7 +376,8 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
                     logger.info(f"Iteration {iter_idx}: {len(missing_ids)} / {need_total} prompts "
                                 f"still missing – resuming generation.")
                     # antislop-vllm already supports '--prompt-id-file' (one id per line)
-                    miss_file = _write_missing_prompt_file(missing_ids, experiment_dir, iter_idx)
+                    # we can skip this as antislop-vllm automatically resumes now
+                    #miss_file = _write_missing_prompt_file(missing_ids, experiment_dir, iter_idx)
 
                     try:
                         run_generation_script_wrapper(
@@ -386,7 +387,7 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
                             banned_ngrams_file_path= ngram_file_for_generation,
                             slop_phrases_file_path = slop_file_for_generation,
                             regex_blocklist_file_path = regex_file_for_generation,
-                            extra_generation_args  = ["--prompt-id-file", str(miss_file)]
+                            #extra_generation_args  = ["--prompt-id-file", str(miss_file)]
                         )
                     except Exception as e:
                         logger.error(f"❌ Generation script failed for iteration {iter_idx}: {e}")
