@@ -120,7 +120,7 @@ top_n_repetition_stat: 50 # N-grams from each category to track for repetition s
 # --- Finetuning (Optional) ---
 finetune_enabled: true
 finetune_mode: "tdpo" # dpo / tdpo (tokenwise-dpo)
-#finetune_tdpo_dataset: "" # you can specify an existing tdpo dataset, or let the pipeline use the one produced in the generation step
+finetune_tdpo_dataset: "" # you can specify an existing tdpo dataset, or let the pipeline use the one produced in the generation step
 finetune_base_model_id: "unsloth/gemma-3-4b-it" # Base model for DPO
 finetune_max_seq_length: 4096
 finetune_load_in_4bit: true
@@ -129,7 +129,7 @@ finetune_lora_alpha: 32
 finetune_lora_dropout: 0.05
 finetune_target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 finetune_gradient_checkpointing: "unsloth"
-# finetune_chat_template: "gemma-3" # get the chat template from unsloth's helper if required, otherwise use the tokeniser's chat template
+finetune_chat_template: "" # e.g. "gemma-3" -- get the chat template from unsloth's helper if required, otherwise leave the string blank to use the tokeniser's chat template
 finetune_batch_size: 1
 finetune_gradient_accumulation_steps: 4
 finetune_warmup_ratio: 0.1
