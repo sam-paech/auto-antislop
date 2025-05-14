@@ -492,36 +492,37 @@ def load_tdpo_dataset(
 
     return ds
 
-
-# ------------------------------------------------------------------
-# freeze_early_layers(model, n_unfrozen=4)
-# ------------------------------------------------------------------
-# Keeps the top `n_unfrozen` transformer blocks (closest to the output)
-# trainable; all earlier blocks have requires_grad=False.
-# Works for Unsloth Gemma / Llama / Mixtral style models.
-# ------------------------------------------------------------------
 def freeze_early_layers(model, n_unfrozen: int = 4, verbose: bool = True):
-    """
-    Freeze the bottom part of the transformer trunk.
+    # ── unwrap PEFT wrappers ──────────────────────────────────────────
+    if hasattr(model, "get_base_model"):
+        model = model.get_base_model()
 
-    Args:
-        model        : a `FastLanguageModel` or HF `PreTrainedModel`
-        n_unfrozen   : how many *last* blocks to keep trainable
-        verbose      : print what’s being frozen
-    """
-    # locate the list that holds the block modules
+    # extra candidate paths for newer HF models
+    candidate_paths = [
+        "model.layers",
+        "model.decoder.layers",
+        "model.transformer.layers",   # Gemma-3, Mixtral, etc.
+        "layers",
+    ]
+
     block_list = None
-    for attr in ["model.layers", "model.decoder.layers", "layers"]:
-        ptr = model
-        good = True
-        for name in attr.split("."):
-            if not hasattr(ptr, name):
-                good = False
+    for path in candidate_paths:
+        obj = model
+        for name in path.split("."):
+            if not hasattr(obj, name):
+                obj = None
                 break
-            ptr = getattr(ptr, name)
-        if good and isinstance(ptr, (list, torch.nn.ModuleList)):
-            block_list = ptr
+            obj = getattr(obj, name)
+        if isinstance(obj, (list, torch.nn.ModuleList)):
+            block_list = obj
             break
+
+    # fall-back: scan for the first ModuleList that looks like transformer blocks
+    if block_list is None:
+        for name, mod in model.named_modules():
+            if isinstance(mod, torch.nn.ModuleList) and len(mod) and hasattr(mod[0], "self_attn"):
+                block_list = mod
+                break
 
     if block_list is None:
         raise RuntimeError("Could not locate transformer layers list")
@@ -531,10 +532,10 @@ def freeze_early_layers(model, n_unfrozen: int = 4, verbose: bool = True):
     if verbose:
         print(f"Freezing layers 0 … {cut-1} of {total} (keeping {n_unfrozen}).")
 
-    # freeze parameters in the lower blocks
-    for i, block in enumerate(block_list):
+    for i, blk in enumerate(block_list):
         if i < cut:
-            block.requires_grad_(False)
+            blk.requires_grad_(False)
+
 
 
 
