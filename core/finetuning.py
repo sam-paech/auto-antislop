@@ -677,7 +677,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         model,
         r=config['finetune_lora_r'],
         lora_alpha=config['finetune_lora_alpha'],
-        lora_dropout=config['finetune_lora_dropout'],
+        #lora_dropout=config['finetune_lora_dropout'],
         bias="none",
         target_modules=config['finetune_target_modules'],
         use_gradient_checkpointing=config['finetune_gradient_checkpointing'],
