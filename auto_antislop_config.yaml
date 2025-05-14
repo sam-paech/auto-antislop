@@ -116,8 +116,8 @@ min_word_len_for_analysis: 3 # For n-gram analysis and lexical diversity
 freq_norm_denom_for_analysis: 100000 # For normalizing frequencies
 top_n_repetition_stat: 50 # N-grams from each category to track for repetition stats
 
-# --- Finetuning (Optional, controlled by --run-finetune flag) ---
-finetune_enabled: true # Can be overridden by --run-finetune
+# --- Finetuning (Optional) ---
+finetune_enabled: true
 finetune_mode: "tdpo" # dpo / tdpo (tokenwise-dpo)
 #finetune_tdpo_dataset: "" # you can specify an existing tdpo dataset, or let the pipeline use the one produced in the generation step
 finetune_base_model_id: "unsloth/gemma-3-4b-it" # Base model for DPO
@@ -133,7 +133,7 @@ finetune_batch_size: 1
 finetune_gradient_accumulation_steps: 4
 finetune_warmup_ratio: 0.1
 finetune_num_epochs: 1 # Reduced for quick example, typically 1-3
-finetune_learning_rate: 0.00005 # 5e-5
+finetune_learning_rate: 0.00001 # 1e-5
 finetune_beta: 0.1 # DPO beta
 finetune_output_dir_suffix: "_dpo_finetuned" # Appended to experiment run dir
 finetune_save_merged_16bit: true
