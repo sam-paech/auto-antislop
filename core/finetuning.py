@@ -201,6 +201,65 @@ class LastTokenDPOTrainer(DPOTrainer):
             return loss, {"chosen_wins": (delta > 0).float().mean().detach()}
         return loss
 
+    # inside LastTokenDPOTrainer
+    def compute_loss(self, model, inputs, return_outputs=False, **_):
+        """
+        TDPO loss with an *additional* token-wise KL penalty that tethers the
+        full output distribution to the reference model.  This curbs
+        context-driven drift while still training on the last-token preference.
+        """
+        # ---- unpack batch ---------------------------------------------------
+        ids      = inputs["prompt_ids"].to(model.device)        # [B, L]
+        attn     = inputs["attention_mask"].to(model.device)    # [B, L]
+        chosen   = inputs["chosen_token_id"].to(model.device)   # [B]
+        rejected = inputs["rejected_token_id"].to(model.device) # [B]
+
+        # ---- policy forward -------------------------------------------------
+        out = model(ids, attention_mask=attn, use_cache=False)
+        last_index  = attn.sum(1) - 1                           # [B]
+        logits_last = out.logits[torch.arange(ids.size(0), device=model.device),
+                                last_index]                    # [B, V]
+
+        logp_good = F.log_softmax(logits_last, -1).gather(-1,
+                    chosen.unsqueeze(-1)).squeeze(-1)
+        logp_bad  = F.log_softmax(logits_last, -1).gather(-1,
+                    rejected.unsqueeze(-1)).squeeze(-1)
+
+        # ---- reference forward ---------------------------------------------
+        with torch.no_grad():
+            if self.ref_model is None:
+                with self.null_ref_context():
+                    ref_out = model(ids, attention_mask=attn, use_cache=False)
+            else:
+                ref_out = self.ref_model(ids, attention_mask=attn, use_cache=False)
+
+            ref_logits_last = ref_out.logits[torch.arange(ids.size(0),
+                                        device=model.device), last_index]
+
+            ref_good = F.log_softmax(ref_logits_last, -1).gather(-1,
+                    chosen.unsqueeze(-1)).squeeze(-1)
+            ref_bad  = F.log_softmax(ref_logits_last, -1).gather(-1,
+                    rejected.unsqueeze(-1)).squeeze(-1)
+
+        # ---- token-wise KL (policy ‖ reference) ----------------------------
+        kl_coeff = getattr(self, "kl_coeff", 0.02)   # set in __init__ if desired
+        kl_all_tokens = F.kl_div(
+            F.log_softmax(out.logits,  dim=-1),
+            F.softmax(ref_out.logits, dim=-1),
+            reduction="batchmean",
+            log_target=False,
+        )
+
+        # ---- scalar TDPO loss ----------------------------------------------
+        delta = (logp_good - ref_good) - (logp_bad - ref_bad)
+        pref_loss = -F.logsigmoid(self.beta * delta).mean()
+
+        loss = pref_loss + kl_coeff * kl_all_tokens
+
+        if return_outputs:
+            return loss, {"chosen_wins": (delta > 0).float().mean().detach(),
+                        "kl_tokens": kl_all_tokens.detach()}
+        return loss
 
 
     # ----------------------------------------------------------
