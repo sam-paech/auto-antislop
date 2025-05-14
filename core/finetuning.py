@@ -657,6 +657,17 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     # else if not 4-bit, user could specify fp16 in config if desired.
     # For simplicity, this example prioritizes bf16 with 4-bit.
 
+    # freeze everything except last 4 transformer blocks
+    freeze_until = model.config.num_hidden_layers - 4
+    for name, module in model.named_modules():
+        if name.startswith("language_model.model.layers."):
+            idx = int(name.split('.')[3])
+            if idx < freeze_until:
+                for p in module.parameters():
+                    p.requires_grad_(False)
+
+
+
     TrainerClass = LastTokenDPOTrainer if mode == "tdpo" else DPOTrainer
 
     dpo_trainer = TrainerClass(
