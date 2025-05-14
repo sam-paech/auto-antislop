@@ -112,6 +112,9 @@ def _build_generation_command(
         command.extend(["--top-n-slop-phrases", "0"])
         command.extend(["--regex-blocklist-file", ""])
     else:
+        # this seems to overlap with another param, should fix
+        command.extend(["--tdpo-pairs-jsonl", str(output_jsonl_path.parent / "tdpo-pairs.jsonl")])
+
         # For iterations > 0, use the ban lists determined by the orchestrate_pipeline function.
         if banned_ngrams_file_for_iter:
             command.extend(["--ngram-banned-file", get_abs_path_str(banned_ngrams_file_for_iter)])
