@@ -202,52 +202,25 @@ class LastTokenDPOTrainer(DPOTrainer):
         return loss
 
     # inside LastTokenDPOTrainer
-    # ------------------------------------------------------------------
-    #  LastTokenDPOTrainer — TDPO loss + token-wise KL with linear ramp
-    # ------------------------------------------------------------------
     def compute_loss(self, model, inputs, return_outputs=False, **_):
-        """
-        preference_loss  = TDPO on final token
-        kl_loss          = mean KL(policy ‖ reference) over *non-pad* tokens
-        total_loss       = preference_loss + kl_coeff(step) * kl_loss
-
-        kl_coeff is linearly annealed from 0 → kl_coeff_target over the
-        first `kl_ramp_steps` optimiser steps.
-        """
-        # ── establish KL-ramp hyper-params on first call -----------------
-        if not hasattr(self, "_kl_setup_done"):
-            self.kl_coeff_target = getattr(self, "kl_coeff_target", 2e-3)
-            ramp_fraction        = getattr(self, "kl_ramp_pct", 0.3)
-            total_steps = (self.args.num_train_epochs
-                        * len(self.train_dataset)
-                        // (self.args.per_device_train_batch_size
-                            * self.args.gradient_accumulation_steps))
-            self.kl_ramp_steps   = int(ramp_fraction * total_steps)
-            self._kl_setup_done  = True
-
-        step = self.state.global_step
-        kl_coeff = ( self.kl_coeff_target * step / self.kl_ramp_steps
-                    if step < self.kl_ramp_steps else
-                    self.kl_coeff_target )
-
-        # ── unpack batch --------------------------------------------------
+        # ── batch tensors ----------------------------------------------------
         ids      = inputs["prompt_ids"].to(model.device)
         attn     = inputs["attention_mask"].to(model.device)
         chosen   = inputs["chosen_token_id"].to(model.device)
         rejected = inputs["rejected_token_id"].to(model.device)
 
-        # ── policy forward -----------------------------------------------
+        # ── policy forward ---------------------------------------------------
         out = model(ids, attention_mask=attn, use_cache=False)
-        last_idx  = attn.sum(1) - 1
+        last_idx   = attn.sum(1) - 1
         logits_last = out.logits[torch.arange(ids.size(0), device=model.device),
-                                last_idx]                       # [B,V]
+                                last_idx]
 
         logp_good = F.log_softmax(logits_last, -1)\
                     .gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
         logp_bad  = F.log_softmax(logits_last, -1)\
                     .gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
 
-        # ── reference forward --------------------------------------------
+        # ── reference forward -----------------------------------------------
         with torch.no_grad():
             ref_out = ( self.ref_model(ids, attention_mask=attn, use_cache=False)
                         if self.ref_model is not None else
@@ -255,35 +228,56 @@ class LastTokenDPOTrainer(DPOTrainer):
             ref_logits_last = ref_out.logits[torch.arange(ids.size(0),
                                                         device=model.device),
                                             last_idx]
-
             ref_good = F.log_softmax(ref_logits_last, -1)\
                         .gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
             ref_bad  = F.log_softmax(ref_logits_last, -1)\
                         .gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
 
-        # ── TDPO preference loss -----------------------------------------
+        # ── preference loss --------------------------------------------------
         delta      = (logp_good - ref_good) - (logp_bad - ref_bad)
         pref_loss  = -F.logsigmoid(self.beta * delta).mean()
 
-        # ── token-wise KL (mask pads) ------------------------------------
+        # ── token-wise KL (masked pads) --------------------------------------
         logp_all = F.log_softmax(out.logits,  dim=-1)
-        ref_prob = F.softmax(ref_out.logits, dim=-1)
+        ref_prob = F.softmax   (ref_out.logits, dim=-1)
 
-        kl_tok   = F.kl_div(logp_all, ref_prob, reduction="none",
-                            log_target=False).sum(-1)           # [B,L]
-        kl_loss  = (kl_tok * attn).sum() / attn.sum()           # mean over real tokens
+        kl_tok  = F.kl_div(logp_all, ref_prob, reduction="none",
+                        log_target=False).sum(-1)           # [B,L]
+        kl_loss = (kl_tok * attn).sum() / attn.sum()           # mean over real tokens
 
-        # ── total ---------------------------------------------------------
+        # ── KL coefficient (linear ramp) ------------------------------------
+        if not hasattr(self, "_kl_setup_done"):
+            self.kl_coeff_target = getattr(self, "kl_coeff_target", 5e-4)
+            ramp_frac  = getattr(self, "kl_ramp_pct", 0.4)
+            tot_steps  = (self.args.num_train_epochs
+                        * len(self.train_dataset)
+                        // (self.args.per_device_train_batch_size
+                            * self.args.gradient_accumulation_steps))
+            self.kl_ramp_steps = max(1, int(ramp_frac * tot_steps))
+            self._kl_setup_done = True
+
+        step = self.state.global_step
+        kl_coeff = ( self.kl_coeff_target * step / self.kl_ramp_steps
+                    if step < self.kl_ramp_steps else
+                    self.kl_coeff_target )
+
+        # ── total loss -------------------------------------------------------
         loss = pref_loss + kl_coeff * kl_loss
 
+        # ── stash metrics so Trainer.log() prints them -----------------------
+        metrics = {
+            "pref_loss":     pref_loss.detach(),
+            "kl_loss":       kl_loss.detach(),
+            "kl_coeff":      torch.tensor(kl_coeff),
+            "chosen_win":    (delta > 0).float().mean().detach(),
+        }
+        self.store_metrics(metrics, train_eval="train")
+
+        # ── output -----------------------------------------------------------
         if return_outputs:
-            return loss, {
-                "pref_loss":  pref_loss.detach(),
-                "kl_loss":    kl_loss.detach(),
-                "kl_coeff":   torch.tensor(kl_coeff),
-                "chosen_win": (delta > 0).float().mean().detach(),
-            }
+            return loss, metrics
         return loss
+
 
 
 
