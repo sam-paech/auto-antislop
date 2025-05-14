@@ -358,7 +358,7 @@ class LastTokenDPOTrainer(DPOTrainer):
         # 6. Linear KL-coefficient ramp  (0 → kl_coeff_target)
         # ──────────────────────────────────────────────────────────────
         if not hasattr(self, "_kl_setup_done"):
-            self.kl_coeff_target = 5e-3
+            self.kl_coeff_target = 5e-2
             ramp_frac  = getattr(self, "kl_ramp_pct", 0.4)
             total_steps = (self.args.num_train_epochs
                         * len(self.train_dataset)
