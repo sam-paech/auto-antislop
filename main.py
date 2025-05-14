@@ -201,7 +201,7 @@ def main():
     experiment_run_dir = None
     try:
         base_dir = Path(config['experiment_base_dir'])
-        resume_dir_path = Path(config['resume_from_dir']) if config['resume_from_dir'] else None
+        resume_dir_path = Path(config['resume_from_dir']) if config.get('resume_from_dir', None) else None
         experiment_run_dir = create_experiment_dir(base_dir, resume_dir_path)
         
         # Pass the actual experiment_run_dir to orchestrate_pipeline
@@ -221,7 +221,7 @@ def main():
 
     # --- Finetuning (Optional) ---
     should_run_finetune = config.get('finetune_enabled', False)
-    
+
     if should_run_finetune:
         if experiment_run_dir:
             # NEW: shut down vLLM so the GPU is free for training
