@@ -47,6 +47,32 @@ def str2bool(v):
         return False
     raise argparse.ArgumentTypeError("Boolean value expected.")
 
+# ── QUICK CHECK: are *all* generation files already complete? ───────────────
+def _all_generations_done(cfg: dict, resume_dir: Path | None) -> bool:
+    if not resume_dir or not resume_dir.is_dir():
+        return False
+
+    need = cfg.get("generation_max_prompts", 0)
+    if need <= 0:
+        return False
+
+    def _ids(path: Path) -> int:
+        if not path.is_file():
+            return 0
+        seen = set()
+        for ln in path.read_text(encoding="utf-8").splitlines():
+            try:
+                seen.add(int(json.loads(ln).get("prompt_id", -1)))
+            except Exception:
+                pass
+        return len(seen)
+
+    for i in range(cfg["num_iterations"]):
+        p = resume_dir / f"iter_{i}_creative_writing_generations.jsonl"
+        if _ids(p) < need:
+            return False
+    return True
+
 
 def main():
     parser = argparse.ArgumentParser(description="Auto-Antislop: Iterative dataset generation and DPO finetuning.")
@@ -164,9 +190,16 @@ def main():
         logger.warning(f"antislop-vllm submodule directory not found at {antislop_vllm_dir}. Generation will likely fail.")
 
 
-    # --- vLLM Server Management ---
+    # --- vLLM Server Management --------------------------------------------------
     vllm_server_proc = None
-    should_manage_vllm = config.get('manage_vllm', True) # Default to True if not in args/config
+    should_manage_vllm = config.get('manage_vllm', True)
+
+    # Fast-path: if every generation file is already finished, don’t even start vLLM
+    if should_manage_vllm and _all_generations_done(config, args.resume_from_dir):
+        logger.info("✨ All generation files complete – skipping vLLM startup altogether.")
+        should_manage_vllm = False
+        config['manage_vllm'] = False  # keep downstream logic consistent
+
     
     if should_manage_vllm:
         if not is_vllm_server_alive(config['vllm_port']):
@@ -233,6 +266,17 @@ def main():
             logger.info("Proceeding to finetuning.")
             finetune_start_time = datetime.datetime.now()
             try:
+                finetune_output_dir = experiment_run_dir / f"finetuned_model{config['finetune_output_dir_suffix']}"
+                if finetune_output_dir.exists():
+                    reply = input(f"⚠️  Finetune dir '{finetune_output_dir}' already exists. "
+                                "Delete & re-run finetune? [y/N]: ").strip().lower()
+                    if reply != "y":
+                        logger.info("Finetune stage skipped by user request.")
+                        return
+                    import shutil
+                    shutil.rmtree(finetune_output_dir, ignore_errors=True)
+                    logger.info("Old finetune directory removed.")
+
                 run_dpo_finetune(config, experiment_run_dir)
             except Exception as e:
                 logger.error("An error occurred during finetuning: %s", e, exc_info=True)

@@ -19,6 +19,31 @@ from core.dpo import create_dpo_dataset
 
 logger = logging.getLogger(__name__)
 
+# --- RESUME HELPERS -------------------------------------------------
+def _load_prompt_ids(path: Path) -> set[int]:
+    """Return the set of prompt_id ints found in an existing generation file."""
+    ids = set()
+    if not path.is_file():                         # nothing yet
+        return ids
+    with path.open(encoding="utf-8") as fh:
+        for ln in fh:
+            try:
+                row = json.loads(ln)
+                pid = row.get("prompt_id")
+                if isinstance(pid, int):
+                    ids.add(pid)
+            except json.JSONDecodeError:
+                continue
+    return ids
+
+
+def _write_missing_prompt_file(missing: list[int], out_dir: Path, iter_idx: int) -> Path:
+    """Write one integer per line – the format antislop-vllm already understands."""
+    p = out_dir / f"iter_{iter_idx}_missing_prompt_ids.txt"
+    p.write_text("\n".join(map(str, missing)), encoding="utf-8")
+    return p
+
+
 def _build_generation_command(
     main_script_path: Path,
     config: Dict[str, Any],
@@ -139,33 +164,19 @@ def run_generation_script_wrapper(
     banned_ngrams_file_path: Optional[Path] = None,
     slop_phrases_file_path: Optional[Path] = None,
     regex_blocklist_file_path: Optional[Path] = None,
+    extra_generation_args: Optional[list[str]] = None,  # NEW
 ) -> None:
     """
-    Manages the execution of the antislop-vllm generation script for a given iteration.
-
-    Args:
-        iter_idx: The current iteration index (0-based).
-        output_jsonl_path: Path where the generation output for this iteration will be saved.
-        config: The main configuration dictionary for auto-antislop.
-        banned_ngrams_file_path: Path to the n-gram ban list (used if iter_idx > 0).
-        slop_phrases_file_path: Path to the slop phrase ban list (used if iter_idx > 0).
-        regex_blocklist_file_path: Path to the regex blocklist (used if iter_idx > 0).
-
-    Raises:
-        FileNotFoundError: If the antislop-vllm/main.py script is not found.
-        RuntimeError: If the generation script fails (exits with a non-zero code).
+    Execute antislop-vllm/main.py for a single iteration, handling all paths,
+    logging, errors, and now arbitrary extra CLI flags.
     """
-    project_root = Path(__file__).resolve().parent.parent 
+    project_root = Path(__file__).resolve().parent.parent
     main_py_script = project_root / "antislop-vllm" / "main.py"
-
-    if not main_py_script.exists():
-        logger.error(f"Generation script not found: {main_py_script}")
+    if not main_py_script.is_file():
         raise FileNotFoundError(
             f"antislop-vllm/main.py not found at {main_py_script}. "
-            "Ensure submodule is present and correctly placed."
+            "Ensure the submodule is present and initialised."
         )
-
-    generation_script_workdir = main_py_script.parent 
 
     cmd_list = _build_generation_command(
         main_script_path=main_py_script,
@@ -174,51 +185,38 @@ def run_generation_script_wrapper(
         iter_idx=iter_idx,
         banned_ngrams_file_for_iter=banned_ngrams_file_path,
         slop_phrases_file_for_iter=slop_phrases_file_path,
-        regex_blocklist_file_for_iter=regex_blocklist_file_path
+        regex_blocklist_file_for_iter=regex_blocklist_file_path,
     )
 
-    # Log the command, truncating long paths for display
-    log_cmd_display_list = []
-    for item in cmd_list:
-        if isinstance(item, str) and ("/" in item or "\\" in item) and len(item) > 70:
-            log_cmd_display_list.append(f"...{item[-67:]}") # Show only the end of long paths
-        else:
-            log_cmd_display_list.append(str(item))
-    
-    logger.info(f"\n┏━━ Iteration {iter_idx}: Launching antislop-vllm/main.py ━━━━━━━━━━━━━┓")
-    logger.info(f"Working Directory: {generation_script_workdir}")
-    logger.info(f"Executing Command: {' '.join(log_cmd_display_list)}")
-    logger.info("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n")
-    
-    logger.info(f"--- Output from antislop-vllm/main.py (Iteration {iter_idx}) will follow ---")
-    try:
-        # Execute the generation script, allowing its output to go to the main terminal
-        process = subprocess.run(
-            cmd_list, 
-            cwd=generation_script_workdir, 
-            check=False, # Manually check returncode
-            # No capture_output, text=True to let subprocess print directly
+    # ── append any ad-hoc flags (e.g. --prompt-id-file <path>) ─────────────
+    if extra_generation_args:
+        cmd_list.extend(extra_generation_args)
+
+    # pretty-log (truncate very long paths)
+    def _short(s: str) -> str:
+        return f"...{s[-67:]}" if ("/" in s or "\\" in s) and len(s) > 70 else s
+    log_cmd = " ".join(_short(c) for c in cmd_list)
+
+    logger.info(f"\n┏━━ Iteration {iter_idx}: launching antislop-vllm ━━━━━━━━━━━━━┓")
+    logger.info(f"cwd: {main_py_script.parent}")
+    logger.info(log_cmd)
+    logger.info("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛")
+
+    proc = subprocess.run(
+        cmd_list,
+        cwd=main_py_script.parent,
+        check=False,
+    )
+
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"antislop-vllm exited with code {proc.returncode} "
+            f"(iteration {iter_idx})"
         )
-        
-        logger.info(f"--- End of output from antislop-vllm/main.py (Iteration {iter_idx}) ---")
 
-        if process.returncode != 0:
-            error_message = (
-                f"antislop-vllm/main.py failed with exit code {process.returncode} for iteration {iter_idx}. "
-                f"See output above for details from the script."
-            )
-            logger.error(error_message)
-            raise RuntimeError(error_message) # Propagate failure
-    
-        logger.info(f"✅ antislop-vllm/main.py finished successfully for iteration {iter_idx}.")
-        logger.info(f"   Output expected at: {output_jsonl_path.resolve()}")
+    logger.info(f"✅ antislop-vllm completed for iteration {iter_idx}. "
+                f"Output: {output_jsonl_path.name}")
 
-    except FileNotFoundError: # Should not happen if main_py_script check above passes
-        logger.critical(f"Failed to execute generation script: {sys.executable} or {main_py_script} not found.")
-        raise
-    except Exception as e: # Catch other potential errors during subprocess.run
-        logger.critical(f"An unexpected error occurred while running generation script for iteration {iter_idx}: {e}", exc_info=True)
-        raise
 
 def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mode: bool):
     logger.info(f"Starting anti-slop pipeline in directory: {experiment_dir}")
@@ -364,27 +362,43 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
                 else:
                     logger.info(f"Iteration {iter_idx}: Using ban lists - N-grams: {ngram_file_for_generation}, Slop: {slop_file_for_generation}, Regex: {regex_file_for_generation}")
 
-                try:
-                    # Pass the determined ban lists to the generation script wrapper
-                    run_generation_script_wrapper(
-                        iter_idx=iter_idx, 
-                        output_jsonl_path=iter_output_jsonl, 
-                        config=config,
-                        # experiment_dir=experiment_dir, # Not strictly needed by wrapper if paths are absolute
-                        banned_ngrams_file_path=ngram_file_for_generation,
-                        slop_phrases_file_path=slop_file_for_generation,
-                        regex_blocklist_file_path=regex_file_for_generation
-                    )
-                except Exception as e:
-                    logger.error(f"❌ Generation script failed for iteration {iter_idx}: {e}")
-                    iteration_stats.append({
-                        "iteration": iter_idx, "status": "generation_failed", 
-                        "error": str(e), "output_file": str(iter_output_jsonl.name)
-                    })
-                    # If iter 0 fails, no baseline. If a later iter fails, final_iter_output_file_for_dpo remains the last good one.
-                    if iter_idx == 0: iter0_output_file_for_dpo = None 
-                    # Don't mark final_iter_output_file_for_dpo as None here, it should hold the last *successful* one.
-                    continue # Skip to next iteration or finish
+                # ────────────────────────────────────────────────────────────────────
+                #  A. fast-path – is generation already complete?
+                # ────────────────────────────────────────────────────────────────────
+                existing_ids  = _load_prompt_ids(iter_output_jsonl)
+                need_total    = config['generation_max_prompts']
+                missing_ids   = sorted(set(range(need_total)) - existing_ids)
+
+                if not missing_ids:
+                    logger.info(f"Iteration {iter_idx}: found {need_total} / {need_total} prompts "
+                                f"in {iter_output_jsonl.name} – skipping generation step.")
+                else:
+                    logger.info(f"Iteration {iter_idx}: {len(missing_ids)} / {need_total} prompts "
+                                f"still missing – resuming generation.")
+                    # antislop-vllm already supports '--prompt-id-file' (one id per line)
+                    miss_file = _write_missing_prompt_file(missing_ids, experiment_dir, iter_idx)
+
+                    try:
+                        run_generation_script_wrapper(
+                            iter_idx               = iter_idx,
+                            output_jsonl_path      = iter_output_jsonl,
+                            config                 = config,
+                            banned_ngrams_file_path= ngram_file_for_generation,
+                            slop_phrases_file_path = slop_file_for_generation,
+                            regex_blocklist_file_path = regex_file_for_generation,
+                            extra_generation_args  = ["--prompt-id-file", str(miss_file)]
+                        )
+                    except Exception as e:
+                        logger.error(f"❌ Generation script failed for iteration {iter_idx}: {e}")
+                        # identical failure-handling block as before …
+                        iteration_stats.append({
+                            "iteration": iter_idx, "status": "generation_failed",
+                            "error": str(e), "output_file": str(iter_output_jsonl.name)
+                        })
+                        if iter_idx == 0:
+                            iter0_output_file_for_dpo = None
+                        continue
+
 
                 if not iter_output_jsonl.exists() or iter_output_jsonl.stat().st_size == 0:
                     logger.error(f"❌ Generation output file {iter_output_jsonl} is missing or empty for iteration {iter_idx}.")
