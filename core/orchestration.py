@@ -247,6 +247,8 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
 
         # --- Ban Lists Paths (initialized here, files created/updated during iterations) ---
         banned_ngrams_json_path = experiment_dir / "banned_ngrams.json"
+        if 'banned_slop_phrases_filename' not in config:
+            config['banned_slop_phrases_filename'] = 'banned_slop_phrases.json'
         banned_slop_phrases_json_path = experiment_dir / config['banned_slop_phrases_filename']
         
         # --- Regex Blocklist (user-supplied, written once if provided, used from iter 1+) ---
