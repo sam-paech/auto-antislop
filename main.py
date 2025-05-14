@@ -62,7 +62,7 @@ def main():
     )
     parser.add_argument(
         "--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        default="INFO", help="Set the logging level for the auto-antislop script."
+        default=None, help="Set the logging level for the auto-antislop script."
     )
 
     # --- vLLM Management ---
@@ -76,17 +76,18 @@ def main():
         help="true/false to let this script start/stop a local vLLM server "
             "(default comes from config)."
     )
-    vllm_group.add_argument("--vllm-port", type=int, help="Port for vLLM server. Overrides config.")
-    vllm_group.add_argument("--vllm-model-id", type=str, help="Model ID for vLLM server. Overrides config.")
-    vllm_group.add_argument( # <<< ADDED
+    vllm_group.add_argument("--vllm-port", type=int, default=None, help="Port for vLLM server. Overrides config.")
+    vllm_group.add_argument("--vllm-model-id", type=str, default=None, help="Model ID for vLLM server. Overrides config.")
+    vllm_group.add_argument(
         "--generation-api-base-url", type=str,
+        default=None,
         help="API base URL for generation requests (passed to antislop-vllm). E.g., http://host:port/v1. Overrides config."
     )
 
     # --- Pipeline Control ---
     pipeline_group = parser.add_argument_group('Pipeline Control')
-    pipeline_group.add_argument("--num-iterations", type=int, help="Number of anti-slop iterations. Overrides config.")
-    pipeline_group.add_argument("--generation-max-prompts", type=int, help="Max prompts for antislop-vllm. Overrides config.")
+    pipeline_group.add_argument("--num-iterations", type=int, default=None, help="Number of anti-slop iterations. Overrides config.")
+    pipeline_group.add_argument("--generation-max-prompts", type=int, default=None, help="Max prompts for antislop-vllm. Overrides config.")
     pipeline_group.add_argument(
         "--generation-step-enabled",
         type=str2bool,
@@ -109,13 +110,13 @@ def main():
             "(default from config)."
     )
 
-    finetune_group.add_argument("--finetune-base-model-id", type=str, help="Base model for DPO. Overrides config.")
-    finetune_group.add_argument("--finetune-num-epochs", type=int, help="Number of epochs for DPO. Overrides config.")
+    finetune_group.add_argument("--finetune-base-model-id", type=str, default=None, help="Base model for DPO. Overrides config.")
+    finetune_group.add_argument("--finetune-num-epochs", type=int, default=None, help="Number of epochs for DPO. Overrides config.")
 
     finetune_group.add_argument(
         "--finetune-mode",
         choices=["dpo", "tdpo"],
-        default="dpo",
+        default=None,
         help="dpo = vanilla DPO on full continuations (default); "
             "tdpo = masked Tokenwise-DPO on partial generation pairs, only computing loss for the completion token."
     )
@@ -130,6 +131,10 @@ def main():
 
     args = parser.parse_args()
 
+        # --- Load and Merge Configuration ---
+    config = load_pipeline_config(args.config_file)
+    config = merge_config_with_cli_args(config, args)
+
     # --- Refine Logging Setup ---
     numeric_log_level = getattr(logging, args.log_level.upper(), logging.INFO)
     # Get all loggers that might have been created by imports
@@ -143,9 +148,7 @@ def main():
     logger.info(f"Logging level set to: {args.log_level.upper()}")
 
 
-    # --- Load and Merge Configuration ---
-    config = load_pipeline_config(args.config_file)
-    config = merge_config_with_cli_args(config, args)
+
 
     # --- Ensure NLTK resources ---
     # These are used by core.analysis
@@ -216,7 +219,7 @@ def main():
         pipeline_duration = datetime.datetime.now() - pipeline_start_time
         logger.info(f"Total anti-slop pipeline duration: {pipeline_duration}")
 
-    # --- DPO Finetuning (Optional) ---
+    # --- Finetuning (Optional) ---
     should_run_finetune = config.get('finetune_enabled', False)
     if args.run_finetune is not None:
         should_run_finetune = args.run_finetune
@@ -225,23 +228,23 @@ def main():
         if experiment_run_dir:
             # NEW: shut down vLLM so the GPU is free for training
             if should_manage_vllm and vllm_server_proc:
-                logger.info("Stopping managed vLLM server before DPO finetuning.")
+                logger.info("Stopping managed vLLM server before finetuning.")
                 stop_vllm_server(vllm_server_proc)
                 vllm_server_proc = None          # prevent a second stop later
 
-            logger.info("Proceeding to DPO finetuning.")
+            logger.info("Proceeding to finetuning.")
             finetune_start_time = datetime.datetime.now()
             try:
                 run_dpo_finetune(config, experiment_run_dir)
             except Exception as e:
-                logger.error("An error occurred during DPO finetuning: %s", e, exc_info=True)
+                logger.error("An error occurred during finetuning: %s", e, exc_info=True)
             finally:
                 finetune_duration = datetime.datetime.now() - finetune_start_time
-                logger.info("Total DPO finetuning duration: %s", finetune_duration)
+                logger.info("Total finetuning duration: %s", finetune_duration)
         else:
-            logger.warning("Skipping DPO finetuning as the main pipeline did not complete successfully or experiment directory is not set.")
+            logger.warning("Skipping finetuning as the main pipeline did not complete successfully or experiment directory is not set.")
     else:
-        logger.info("DPO finetuning is disabled by config/CLI or due to pipeline issues.")
+        logger.info("inetuning is disabled by config/CLI or due to pipeline issues.")
 
 
 if __name__ == "__main__":

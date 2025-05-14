@@ -71,6 +71,7 @@ def _build_generation_command(
         "--api-base-url", gen_api_base_url,
         "--api-key", config['generation_api_key'],
         "--model-name", config['generation_model_id'],
+        "--config", str((main_script_path.parent / "config-example.yaml").resolve()), # provides pipeline defaults that we aren't passing here
         "--output-jsonl", get_abs_path_str(output_jsonl_path),
         "--input-hf-dataset", config['generation_hf_dataset_name'],
         "--hf-dataset-split", config['generation_hf_dataset_split'],
