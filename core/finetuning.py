@@ -155,7 +155,9 @@ class LastTokenDPOTrainer(DPOTrainer):
             "rejected_token_id": rejected,
         }
 
+    # 
     # ──────────────────────────────────────────────────────────────
+    # this version maybe worked ok if constrained to lm_head and given a v. high lr
     def compute_loss(self, model, inputs, return_outputs=False, **_):
         ids      = inputs["prompt_ids"].to(model.device)           # [B, L]
         attn     = inputs["attention_mask"].to(model.device)       # [B, L]
@@ -201,83 +203,6 @@ class LastTokenDPOTrainer(DPOTrainer):
             return loss, {"chosen_wins": (delta > 0).float().mean().detach()}
         return loss
 
-    # inside LastTokenDPOTrainer
-    def compute_loss(self, model, inputs, return_outputs=False, **_):
-        # ── batch tensors ----------------------------------------------------
-        ids      = inputs["prompt_ids"].to(model.device)
-        attn     = inputs["attention_mask"].to(model.device)
-        chosen   = inputs["chosen_token_id"].to(model.device)
-        rejected = inputs["rejected_token_id"].to(model.device)
-
-        # ── policy forward ---------------------------------------------------
-        out = model(ids, attention_mask=attn, use_cache=False)
-        last_idx   = attn.sum(1) - 1
-        logits_last = out.logits[torch.arange(ids.size(0), device=model.device),
-                                last_idx]
-
-        logp_good = F.log_softmax(logits_last, -1)\
-                    .gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
-        logp_bad  = F.log_softmax(logits_last, -1)\
-                    .gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
-
-        # ── reference forward -----------------------------------------------
-        with torch.no_grad():
-            ref_out = ( self.ref_model(ids, attention_mask=attn, use_cache=False)
-                        if self.ref_model is not None else
-                        model(ids, attention_mask=attn, use_cache=False) )
-            ref_logits_last = ref_out.logits[torch.arange(ids.size(0),
-                                                        device=model.device),
-                                            last_idx]
-            ref_good = F.log_softmax(ref_logits_last, -1)\
-                        .gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
-            ref_bad  = F.log_softmax(ref_logits_last, -1)\
-                        .gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
-
-        # ── preference loss --------------------------------------------------
-        delta      = (logp_good - ref_good) - (logp_bad - ref_bad)
-        pref_loss  = -F.logsigmoid(self.beta * delta).mean()
-
-        # ── token-wise KL (masked pads) --------------------------------------
-        logp_all = F.log_softmax(out.logits,  dim=-1)
-        ref_prob = F.softmax   (ref_out.logits, dim=-1)
-
-        kl_tok  = F.kl_div(logp_all, ref_prob, reduction="none",
-                        log_target=False).sum(-1)           # [B,L]
-        kl_loss = (kl_tok * attn).sum() / attn.sum()           # mean over real tokens
-
-        # ── KL coefficient (linear ramp) ------------------------------------
-        if not hasattr(self, "_kl_setup_done"):
-            self.kl_coeff_target = getattr(self, "kl_coeff_target", 5e-4)
-            ramp_frac  = getattr(self, "kl_ramp_pct", 0.4)
-            tot_steps  = (self.args.num_train_epochs
-                        * len(self.train_dataset)
-                        // (self.args.per_device_train_batch_size
-                            * self.args.gradient_accumulation_steps))
-            self.kl_ramp_steps = max(1, int(ramp_frac * tot_steps))
-            self._kl_setup_done = True
-
-        step = self.state.global_step
-        kl_coeff = ( self.kl_coeff_target * step / self.kl_ramp_steps
-                    if step < self.kl_ramp_steps else
-                    self.kl_coeff_target )
-
-        # ── total loss -------------------------------------------------------
-        loss = pref_loss + kl_coeff * kl_loss
-
-        # ── stash metrics so Trainer.log() prints them -----------------------
-        metrics = {
-            "pref_loss":     pref_loss.detach(),
-            "kl_loss":       kl_loss.detach(),
-            "kl_coeff":      torch.tensor(kl_coeff),
-            "chosen_win":    (delta > 0).float().mean().detach(),
-        }
-        self.store_metrics(metrics, train_eval="train")
-
-        # ── output -----------------------------------------------------------
-        if return_outputs:
-            return loss, metrics
-        return loss
-
 
     # ---------------------------------------------------------------------
     # LastTokenDPOTrainer.compute_loss
@@ -288,6 +213,9 @@ class LastTokenDPOTrainer(DPOTrainer):
     # – Keeps the linear KL-ramp (0 → kl_coeff_target over kl_ramp_pct of
     #   total steps).
     # ---------------------------------------------------------------------
+
+    # this version attempts to minimise the effect of the context on what we're training
+    # to focus on the chosen/rejected final tokens
     def compute_loss(self, model, inputs, return_outputs=False, **_):
         # ──────────────────────────────────────────────────────────────
         # 1. Unpack batch tensors
@@ -392,6 +320,89 @@ class LastTokenDPOTrainer(DPOTrainer):
             return loss, metrics
         return loss
 
+    # version targeting only the last token position
+    def compute_loss(self, model, inputs, return_outputs=False, **_):
+        ids      = inputs["prompt_ids"].to(model.device)         # [B,L]
+        attn     = inputs["attention_mask"].to(model.device)     # [B,L]
+        chosen   = inputs["chosen_token_id"].to(model.device)    # [B]
+        rejected = inputs["rejected_token_id"].to(model.device)  # [B]
+
+        # ── split positions -----------------------------------------------------
+        last_idx   = attn.sum(1) - 1                             # [B]
+        ctx_ids    = ids.clone()
+        tok_ids    = torch.zeros_like(ids)                       # will hold only the last token
+        for b, idx in enumerate(last_idx):
+            ctx_ids[b, idx] = self.padding_value                 # mask last token out
+            tok_ids[b, idx] = ids[b, idx]                        # keep only last token
+        ctx_attn   = ctx_ids.ne(self.padding_value)
+        tok_attn   = tok_ids.ne(0)                               # 1 at last token
+
+        # ── 1 ▸ forward context *without* grad -------------------------------
+        with torch.no_grad():
+            ctx_out = model(
+                ctx_ids,
+                attention_mask=ctx_attn,
+                use_cache=True,            # we need past_key_values
+                return_dict=True,
+            )
+            past_kv = ctx_out.past_key_values
+
+        # ── 2 ▸ forward last token *with* grad -------------------------------
+        tok_out = model(
+            tok_ids,
+            attention_mask=tok_attn,
+            past_key_values=past_kv,
+            use_cache=False,
+            return_dict=True,
+        )
+        logits_last = tok_out.logits[torch.arange(ids.size(0), device=model.device), last_idx]
+
+        # ── log-probs ----------------------------------------------------------
+        logp_good = F.log_softmax(logits_last, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
+        logp_bad  = F.log_softmax(logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
+
+        # ── reference model (no grad) -----------------------------------------
+        with torch.no_grad():
+            if self.ref_model is None:
+                with self.null_ref_context():
+                    ref_tok_out = model(
+                        tok_ids,
+                        attention_mask=tok_attn,
+                        past_key_values=past_kv,
+                        use_cache=False,
+                        return_dict=True,
+                    )
+            else:
+                ref_tok_out = self.ref_model(
+                    tok_ids,
+                    attention_mask=tok_attn,
+                    past_key_values=past_kv,
+                    use_cache=False,
+                    return_dict=True,
+                )
+            ref_logits_last = ref_tok_out.logits[torch.arange(ids.size(0), device=model.device), last_idx]
+            ref_good = F.log_softmax(ref_logits_last, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
+            ref_bad  = F.log_softmax(ref_logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
+
+        # ── preference loss (only last-token path) ----------------------------
+        delta     = (logp_good - ref_good) - (logp_bad - ref_bad)
+        pref_loss = -F.logsigmoid(self.beta * delta).mean()
+
+        # ── (optional) disable prompt-level KL completely ---------------------
+        kl_loss   = torch.tensor(0.0, device=model.device)
+
+        loss = pref_loss + kl_loss                       # kl_loss is zero, but left for clarity
+
+        metrics = {
+            "pref_loss":  pref_loss.detach(),
+            "chosen_win": (delta > 0).float().mean().detach(),
+        }
+        self.store_metrics(metrics, train_eval="train")
+
+        if return_outputs:
+            return loss, metrics
+        return loss
+    # --- end new compute_loss ----------------------------------------------------
 
 
     # ----------------------------------------------------------
