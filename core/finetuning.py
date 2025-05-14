@@ -589,6 +589,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             data_files=str(dataset_path),
             split="train"
         )
+        dpo_dataset_hf = dpo_dataset_hf.shuffle(seed=config.get("finetune_shuffle_seed", 3407))
 
         # ── filter malformed rows (prompt / chosen / rejected missing) ──
         req_cols = {"prompt", "chosen", "rejected"}
@@ -623,6 +624,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         # defer actual loading until tokenizer is ready
         tdpo_dataset_path = dataset_path
         dpo_dataset_hf = load_tdpo_dataset(tdpo_dataset_path, tokenizer, max_seq_len=max_seq_length)
+        dpo_dataset_hf = dpo_dataset_hf.shuffle(seed=config.get("finetune_shuffle_seed", 3407))
 
     else:
         logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'tdpo'.")
@@ -695,7 +697,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             model.config.gradient_checkpointing = False
 
 
-    freeze_early_layers(model, n_unfrozen = 4, verbose = True)
+    #freeze_early_layers(model, n_unfrozen = 4, verbose = True)
 
 
     # --- DPO Trainer Setup ---
