@@ -136,7 +136,7 @@ def main():
     config = merge_config_with_cli_args(config, args)
 
     # --- Refine Logging Setup ---
-    numeric_log_level = getattr(logging, config.log_level.upper(), logging.INFO)
+    numeric_log_level = getattr(logging, config['log_level'].upper(), logging.INFO)
     # Get all loggers that might have been created by imports
     for name in logging.root.manager.loggerDict:
         logger_instance = logging.getLogger(name)
@@ -145,7 +145,7 @@ def main():
         for handler in logger_instance.handlers:
             handler.setLevel(min(numeric_log_level, handler.level)) # Don't make handler less verbose than logger
     logging.getLogger().setLevel(numeric_log_level) # Root logger
-    logger.info(f"Logging level set to: {config.log_level.upper()}")
+    logger.info(f"Logging level set to: {config['log_level'].upper()}")
 
 
 
@@ -201,7 +201,7 @@ def main():
     experiment_run_dir = None
     try:
         base_dir = Path(config['experiment_base_dir'])
-        resume_dir_path = Path(config.resume_from_dir) if config.resume_from_dir else None
+        resume_dir_path = Path(config['resume_from_dir']) if config['resume_from_dir'] else None
         experiment_run_dir = create_experiment_dir(base_dir, resume_dir_path)
         
         # Pass the actual experiment_run_dir to orchestrate_pipeline
@@ -221,7 +221,7 @@ def main():
 
     # --- Finetuning (Optional) ---
     should_run_finetune = config.get('finetune_enabled', False)
-
+    
     if should_run_finetune:
         if experiment_run_dir:
             # NEW: shut down vLLM so the GPU is free for training
