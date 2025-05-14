@@ -54,6 +54,8 @@ def _build_generation_command(
     def get_abs_path_str(p: Optional[Path]) -> Optional[str]:
         """Resolves a Path object to an absolute path string, or returns None."""
         return str(p.resolve()) if p else None
+    
+    output_jsonl_path_str = str(output_jsonl_path.parent.parent / f"iter_{str(iter_idx)}_tdpo_pairs.jsonl")
 
     # Determine the API base URL for generation requests
     gen_api_base_url = config.get('generation_api_base_url')
@@ -72,7 +74,7 @@ def _build_generation_command(
         "--api-key", config['generation_api_key'],
         "--model-name", config['generation_model_id'],
         "--config", str((main_script_path.parent / "config-example.yaml").resolve()), # provides pipeline defaults that we aren't passing here
-        "--output-jsonl", get_abs_path_str(output_jsonl_path),
+        "--output-jsonl", output_jsonl_path_str,
         "--input-hf-dataset", config['generation_hf_dataset_name'],
         "--hf-dataset-split", config['generation_hf_dataset_split'],
         "--threads", str(config['generation_threads']),
@@ -113,7 +115,7 @@ def _build_generation_command(
         command.extend(["--regex-blocklist-file", ""])
     else:
         # this seems to overlap with another param, should fix
-        command.extend(["--tdpo-pairs-jsonl", str(output_jsonl_path.parent / "tdpo-pairs.jsonl")])
+        command.extend(["--tdpo-pairs-jsonl", output_jsonl_path_str])
 
         # For iterations > 0, use the ban lists determined by the orchestrate_pipeline function.
         if banned_ngrams_file_for_iter:
