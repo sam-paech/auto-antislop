@@ -19,6 +19,7 @@ _ALWAYS: Sequence[str] = (
     "min_word_len_for_analysis",
     "freq_norm_denom_for_analysis",
     "top_n_repetition_stat",
+    "log_level"
 )
 
 _VLLM: Sequence[str] = (
