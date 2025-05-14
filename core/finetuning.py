@@ -139,21 +139,28 @@ class LastTokenDPOTrainer(DPOTrainer):
     # ──────────────────────────────────────────────────────────────
     def tdpo_collator(self, features):
         pad_id = self.padding_value
+        max_len = self.args.max_length        # 4096 from your config
 
+        # regular left-pad so we keep right-alignment semantics
         prompt_tensors = [torch.tensor(f["prompt_ids"]) for f in features]
-        prompt_ids = pad_sequence(prompt_tensors, batch_first=True,
-                                  padding_value=pad_id)           # [B, L]
-        attention_mask = prompt_ids.ne(pad_id)                     # bool
+        prompt_ids = pad_sequence(prompt_tensors,
+                                batch_first=True,
+                                padding_value=pad_id)
+
+        # force-pad to static length to kill shape sprawl
+        if prompt_ids.size(1) < max_len:
+            pad_cols = max_len - prompt_ids.size(1)
+            prompt_ids = F.pad(prompt_ids, (pad_cols, 0), value=pad_id)
+
+        attention_mask = prompt_ids.ne(pad_id)
 
         chosen   = torch.tensor([f["chosen_token_id"]   for f in features])
         rejected = torch.tensor([f["rejected_token_id"] for f in features])
 
-        return {
-            "prompt_ids": prompt_ids,
-            "attention_mask": attention_mask,
-            "chosen_token_id": chosen,
-            "rejected_token_id": rejected,
-        }
+        return dict(prompt_ids=prompt_ids,
+                    attention_mask=attention_mask,
+                    chosen_token_id=chosen,
+                    rejected_token_id=rejected)
 
     # 
     # ──────────────────────────────────────────────────────────────
