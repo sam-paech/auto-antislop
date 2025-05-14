@@ -213,34 +213,93 @@ class LastTokenDPOTrainer(DPOTrainer):
 # ---------------------------------------------------------------------
 
 
-def load_tdpo_dataset(path: Path, tokenizer, max_seq_len: int = 4096):
+def load_tdpo_dataset(
+    path: Path,
+    tokenizer,
+    max_seq_len: int = 4096,
+) -> "datasets.Dataset":
     """
-    Each JSONL row must have
-        • context_with_chat_template : shared prompt
-        • chosen_decoded             : human-picked next token (string)
-        • rejected_decoded           : model alternative (string)
-    Returns a HF Dataset with integer fields ready for the trainer.
+    Load a TDPO jsonl file and enforce (with diagnostics) the
+    “identical-until-last-token” assumption.
+
+    Behaviour
+    ---------
+    • If the *last* token of the chosen / rejected suffix is identical
+      ➔ log *error*, drop that row.
+    • Otherwise we always *keep* the row, but:
+        – If either suffix has >1 token after tokenisation **or**
+        – If any earlier token differs between suffixes,
+          ➔ log *warning* including the divergent tokens.
+    • For training we still use ONLY the *final* token of each suffix.
+
+    Expected columns in the jsonl:
+        context_with_chat_template, chosen_decoded, rejected_decoded
     """
     ds = load_dataset("json", data_files=str(path), split="train")
-    tokenizer.truncation_side = "left"        # keep the most recent history
+    tokenizer.truncation_side = "left"
 
-    def _tok(ex):
-        enc = tokenizer(
-            ex["context_with_chat_template"],
+    def _tokenise_row(example):
+        # ------- encode prompt ---------------------------------------------
+        prompt_enc = tokenizer(
+            example["context_with_chat_template"],
             add_special_tokens=False,
             truncation=True,
-            max_length=max_seq_len - 1,       # one slot left for the “next” token
+            max_length=max_seq_len - 1,
             return_attention_mask=False,
         )
+
+        # ------- encode suffixes -------------------------------------------
+        chosen_ids   = tokenizer(example["chosen_decoded"],
+                                 add_special_tokens=False).input_ids
+        rejected_ids = tokenizer(example["rejected_decoded"],
+                                 add_special_tokens=False).input_ids
+
+        # Empty suffix -> unusable row
+        if not chosen_ids or not rejected_ids:
+            logger.error("Empty suffix detected – dropping row.")
+            return {"__valid": False}
+
+        last_same = chosen_ids[-1] == rejected_ids[-1]
+        prefix_diff = (
+            len(chosen_ids) > 1
+            or len(rejected_ids) > 1
+            or chosen_ids[:-1] != rejected_ids[:-1]
+        )
+
+        if last_same:
+            logger.error(
+                "Chosen / rejected share identical last token – "
+                "dropping row. "
+                f"Tokens: {tokenizer.convert_ids_to_tokens(chosen_ids)}"
+            )
+            return {"__valid": False}
+
+        if prefix_diff:
+            logger.warning(
+                "Suffixes diverge before last token. "
+                f"chosen={tokenizer.convert_ids_to_tokens(chosen_ids)}, "
+                f"rejected={tokenizer.convert_ids_to_tokens(rejected_ids)}"
+            )
+
         return {
-            "prompt_ids": enc.input_ids,
-            "chosen_token_id":   tokenizer(ex["chosen_decoded"],
-                                           add_special_tokens=False).input_ids[0],
-            "rejected_token_id": tokenizer(ex["rejected_decoded"],
-                                           add_special_tokens=False).input_ids[0],
+            "prompt_ids": prompt_enc.input_ids,
+            "chosen_token_id":   chosen_ids[-1],
+            "rejected_token_id": rejected_ids[-1],
+            "__valid": True,
         }
 
-    return ds.map(_tok, remove_columns=ds.column_names)
+    ds = ds.map(_tokenise_row, remove_columns=ds.column_names)
+    total = len(ds)
+    ds = ds.filter(lambda ex: ex["__valid"])
+    kept = len(ds)
+    logger.info(f"TDPO dataset: kept {kept}/{total} rows "
+                f"({total - kept} dropped for identical last token).")
+
+    ds = ds.remove_columns("__valid")
+    if kept == 0:
+        raise ValueError("No valid rows remaining after TDPO sanity check.")
+
+    return ds
 
 
 
@@ -250,7 +309,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     
 
-    logger.info("Starting DPO finetuning process...")
+    logger.info("Starting finetuning process...")
 
     model_name = config['finetune_base_model_id']
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -435,14 +494,14 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         ),
     )
 
-    logger.info(f"Starting DPO training. Output will be in {finetune_output_dir}. Check tensorboard for progress.")
+    logger.info(f"Starting training. Output will be in {finetune_output_dir}. Check tensorboard for progress.")
     try:
         trainer_stats = dpo_trainer.train()
         logger.info("DPO training finished.")
         if hasattr(trainer_stats, 'metrics'):
             logger.info(f"Trainer metrics: {trainer_stats.metrics}")
     except Exception as e:
-        logger.error(f"Error during DPO training: {e}", exc_info=True)
+        logger.error(f"Error during training: {e}", exc_info=True)
         return
 
     # --- Saving Model ---
@@ -451,21 +510,21 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         lora_save_path = finetune_output_dir / "lora_adapters"
         dpo_trainer.save_model(str(lora_save_path)) 
         tokenizer.save_pretrained(str(lora_save_path))
-        logger.info(f"DPO LoRA adapters and tokenizer saved to {lora_save_path}")
+        logger.info(f"LoRA adapters and tokenizer saved to {lora_save_path}")
 
         if config.get('finetune_save_merged_16bit'):
             merged_path = finetune_output_dir / "merged_16bit"
             logger.info(f"Saving merged 16-bit model to {merged_path}...")
             model.save_pretrained_merged(str(merged_path), tokenizer, save_method="merged_16bit", safe_serialization=True)
-            logger.info(f"Merged 16-bit DPO model saved to {merged_path}")
+            logger.info(f"Merged 16-bit model saved to {merged_path}")
 
         if config.get('finetune_save_gguf_q8_0'):
             gguf_path = finetune_output_dir / "gguf_q8_0" 
             logger.info(f"Saving GGUF Q8_0 model to {gguf_path}.gguf ...")
             model.save_pretrained_gguf(str(gguf_path), tokenizer, quantization_method="q8_0")
-            logger.info(f"GGUF Q8_0 DPO model saved to {gguf_path}.gguf")
+            logger.info(f"GGUF Q8_0 model saved to {gguf_path}.gguf")
 
     except Exception as e:
-        logger.error(f"Error saving DPO model: {e}", exc_info=True)
+        logger.error(f"Error saving model: {e}", exc_info=True)
 
-    logger.info("DPO finetuning process completed.")
+    logger.info("Finetuning process completed.")
