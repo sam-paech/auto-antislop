@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT_DIR / "slop-forensics"))
 # antislop-vllm is called as a script, its path for direct import is not strictly needed
 # unless some of its utils were to be imported by auto-antislop (not the current plan).
 
-from utils.config_loader import load_pipeline_config, merge_config_with_cli_args, DEFAULT_CONFIG
+from utils.config_loader import load_pipeline_config, merge_config_with_cli_args
 from utils.fs_helpers import (
     create_experiment_dir,
     ensure_antislop_vllm_config_exists
