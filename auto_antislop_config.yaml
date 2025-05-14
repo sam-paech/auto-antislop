@@ -3,6 +3,7 @@
 # --- Experiment Setup ---
 experiment_base_dir: "results/auto_antislop_runs" # Base for timestamped run directories
 human_profile_path: "data/human_writing_profile.json"
+log_level: "INFO"
 
 # --- vLLM Server Management (if --manage-vllm is True) ---
 manage_vllm: true
