@@ -55,7 +55,7 @@ def _build_generation_command(
         """Resolves a Path object to an absolute path string, or returns None."""
         return str(p.resolve()) if p else None
     
-    output_jsonl_path_str = str(output_jsonl_path.parent.parent / f"iter_{str(iter_idx)}_tdpo_pairs.jsonl")
+    output_jsonl_path_str = get_abs_path_str(output_jsonl_path.parent / f"iter_{str(iter_idx)}_tdpo_pairs.jsonl")
 
     # Determine the API base URL for generation requests
     gen_api_base_url = config.get('generation_api_base_url')
