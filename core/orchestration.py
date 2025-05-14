@@ -222,56 +222,57 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
         logger.info("⚠️  Generation step disabled by config/CLI flag.")
 
     
-    # --- NLTK Stopwords ---
-    try:
-        from nltk.corpus import stopwords # Import here to keep it local to this function
-        stop_words_set = set(stopwords.words('english'))
-        logger.info(f"Loaded {len(stop_words_set)} NLTK stopwords for 'english'.")
-    except LookupError:
-        logger.error("NLTK 'stopwords' for 'english' not found. Please run fs_helpers.download_nltk_resource or download manually.")
-        logger.error("Pipeline cannot continue without stopwords for analysis.")
-        raise # Critical for analysis
-        
-    # --- Human Profile ---
-    human_profile_path = Path(config['human_profile_path'])
-    if not human_profile_path.is_file():
-        logger.error(f"Human profile JSON not found: {human_profile_path.resolve()}")
-        raise FileNotFoundError(f"Human profile not found at {human_profile_path}")
-    try:
-        with human_profile_path.open("r", encoding="utf-8") as f_hp:
-            human_profile_full: dict = json.load(f_hp)
-    except Exception as e:
-        logger.error(f"Could not load or parse human profile JSON '{human_profile_path}': {e}")
-        raise
-
-    # --- Ban Lists Paths (initialized here, files created/updated during iterations) ---
-    banned_ngrams_json_path = experiment_dir / "banned_ngrams.json"
-    banned_slop_phrases_json_path = experiment_dir / config['banned_slop_phrases_filename']
-    
-    # --- Regex Blocklist (user-supplied, written once if provided, used from iter 1+) ---
-    # This file is created before the loop, but only passed to generation from iter 1.
-    user_regex_blocklist_file: Optional[Path] = None # Renamed for clarity
-    if config.get('extra_regex_patterns'):
-        user_regex_blocklist_file = experiment_dir / "user_defined_regex_blocklist.json"
+    if generation_enabled:
+        # --- NLTK Stopwords ---
         try:
-            # Write it once if resuming and it doesn't exist, or if not resuming.
-            # This ensures it's available for later iterations if resuming.
-            if not resume_mode or (resume_mode and not user_regex_blocklist_file.exists()):
-                 user_regex_blocklist_file.write_text(
-                    json.dumps(config['extra_regex_patterns'], indent=2, ensure_ascii=False),
-                    encoding="utf-8"
-                )
-                 logger.info(f"📝 User-defined regex blocklist written to {user_regex_blocklist_file}")
-            elif user_regex_blocklist_file.exists():
-                 logger.info(f"📝 User-defined regex blocklist already exists at {user_regex_blocklist_file}")
-
+            from nltk.corpus import stopwords # Import here to keep it local to this function
+            stop_words_set = set(stopwords.words('english'))
+            logger.info(f"Loaded {len(stop_words_set)} NLTK stopwords for 'english'.")
+        except LookupError:
+            logger.error("NLTK 'stopwords' for 'english' not found. Please run fs_helpers.download_nltk_resource or download manually.")
+            logger.error("Pipeline cannot continue without stopwords for analysis.")
+            raise # Critical for analysis
+            
+        # --- Human Profile ---
+        human_profile_path = Path(config['human_profile_path'])
+        if not human_profile_path.is_file():
+            logger.error(f"Human profile JSON not found: {human_profile_path.resolve()}")
+            raise FileNotFoundError(f"Human profile not found at {human_profile_path}")
+        try:
+            with human_profile_path.open("r", encoding="utf-8") as f_hp:
+                human_profile_full: dict = json.load(f_hp)
         except Exception as e:
-            logger.error(f"Failed to write user-defined regex blocklist: {e}. It will not be used.")
-            user_regex_blocklist_file = None # Disable if write fails
+            logger.error(f"Could not load or parse human profile JSON '{human_profile_path}': {e}")
+            raise
 
-    iteration_stats: list[dict] = []
-    iter0_output_file_for_dpo: Optional[Path] = None
-    final_iter_output_file_for_dpo: Optional[Path] = None # Tracks the latest successful output
+        # --- Ban Lists Paths (initialized here, files created/updated during iterations) ---
+        banned_ngrams_json_path = experiment_dir / "banned_ngrams.json"
+        banned_slop_phrases_json_path = experiment_dir / config['banned_slop_phrases_filename']
+        
+        # --- Regex Blocklist (user-supplied, written once if provided, used from iter 1+) ---
+        # This file is created before the loop, but only passed to generation from iter 1.
+        user_regex_blocklist_file: Optional[Path] = None # Renamed for clarity
+        if config.get('extra_regex_patterns'):
+            user_regex_blocklist_file = experiment_dir / "user_defined_regex_blocklist.json"
+            try:
+                # Write it once if resuming and it doesn't exist, or if not resuming.
+                # This ensures it's available for later iterations if resuming.
+                if not resume_mode or (resume_mode and not user_regex_blocklist_file.exists()):
+                    user_regex_blocklist_file.write_text(
+                        json.dumps(config['extra_regex_patterns'], indent=2, ensure_ascii=False),
+                        encoding="utf-8"
+                    )
+                    logger.info(f"📝 User-defined regex blocklist written to {user_regex_blocklist_file}")
+                elif user_regex_blocklist_file.exists():
+                    logger.info(f"📝 User-defined regex blocklist already exists at {user_regex_blocklist_file}")
+
+            except Exception as e:
+                logger.error(f"Failed to write user-defined regex blocklist: {e}. It will not be used.")
+                user_regex_blocklist_file = None # Disable if write fails
+
+        iteration_stats: list[dict] = []
+        iter0_output_file_for_dpo: Optional[Path] = None
+        final_iter_output_file_for_dpo: Optional[Path] = None # Tracks the latest successful output
     
     start_iter_idx = 0
     if resume_mode:
