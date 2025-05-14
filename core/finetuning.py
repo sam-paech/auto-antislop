@@ -279,6 +279,118 @@ class LastTokenDPOTrainer(DPOTrainer):
         return loss
 
 
+    # ---------------------------------------------------------------------
+    # LastTokenDPOTrainer.compute_loss
+    # ---------------------------------------------------------------------
+    # – Adds a token-wise KL regulariser that *ignores* the last position
+    #   so we still tether the prompt/context to the reference model but
+    #   let the single decision token drift freely.
+    # – Keeps the linear KL-ramp (0 → kl_coeff_target over kl_ramp_pct of
+    #   total steps).
+    # ---------------------------------------------------------------------
+    def compute_loss(self, model, inputs, return_outputs=False, **_):
+        # ──────────────────────────────────────────────────────────────
+        # 1. Unpack batch tensors
+        # ──────────────────────────────────────────────────────────────
+        ids      = inputs["prompt_ids"].to(model.device)           # [B,L]
+        attn     = inputs["attention_mask"].to(model.device)       # [B,L]  (1 = real token)
+        chosen   = inputs["chosen_token_id"].to(model.device)      # [B]
+        rejected = inputs["rejected_token_id"].to(model.device)    # [B]
+
+        # ──────────────────────────────────────────────────────────────
+        # 2. Forward pass – current policy
+        # ──────────────────────────────────────────────────────────────
+        out = model(ids, attention_mask=attn, use_cache=False)
+        last_idx = attn.sum(1) - 1                                 # [B]
+        logits_last = out.logits[torch.arange(ids.size(0), device=model.device),
+                                last_idx]                         # [B,V]
+
+        logp_good = F.log_softmax(logits_last, -1)\
+                    .gather(-1, chosen.unsqueeze(-1)).squeeze(-1)    # [B]
+        logp_bad  = F.log_softmax(logits_last, -1)\
+                    .gather(-1, rejected.unsqueeze(-1)).squeeze(-1)  # [B]
+
+        # ──────────────────────────────────────────────────────────────
+        # 3. Forward pass – reference policy
+        #    (either a separate ref_model or the base model with adapters
+        #     disabled if self.ref_model is None)
+        # ──────────────────────────────────────────────────────────────
+        with torch.no_grad():
+            if self.ref_model is None:
+                with self.null_ref_context():
+                    ref_out = model(ids, attention_mask=attn, use_cache=False)
+            else:
+                ref_out = self.ref_model(ids, attention_mask=attn, use_cache=False)
+
+            ref_logits_last = ref_out.logits[torch.arange(ids.size(0), device=model.device),
+                                            last_idx]
+
+            ref_good = F.log_softmax(ref_logits_last, -1)\
+                        .gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
+            ref_bad  = F.log_softmax(ref_logits_last, -1)\
+                        .gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
+
+        # ──────────────────────────────────────────────────────────────
+        # 4. TDPO preference loss  (only last token)
+        # ──────────────────────────────────────────────────────────────
+        delta      = (logp_good - ref_good) - (logp_bad - ref_bad)
+        pref_loss  = -F.logsigmoid(self.beta * delta).mean()
+
+        # ──────────────────────────────────────────────────────────────
+        # 5. Token-wise KL on *prompt/context* only
+        #    • Compute KL(policy ‖ ref) at every position.
+        #    • Mask out padding tokens AND the last position so the
+        #      regulariser cannot fight the preference update.
+        # ──────────────────────────────────────────────────────────────
+        logp_all = F.log_softmax(out.logits,  dim=-1)              # [B,L,V]
+        ref_prob = F.softmax   (ref_out.logits, dim=-1)            # [B,L,V]
+
+        kl_tok = F.kl_div(logp_all, ref_prob, reduction="none",
+                        log_target=False).sum(-1)                # [B,L]
+
+        kl_tok *= attn                                            # zero pads
+        batch_idx = torch.arange(ids.size(0), device=model.device)
+        kl_tok[batch_idx, last_idx] = 0.0                         # zero last token
+
+        kl_loss = kl_tok.sum() / attn.sum()                       # mean over real tokens
+
+        # ──────────────────────────────────────────────────────────────
+        # 6. Linear KL-coefficient ramp  (0 → kl_coeff_target)
+        # ──────────────────────────────────────────────────────────────
+        if not hasattr(self, "_kl_setup_done"):
+            self.kl_coeff_target = getattr(self, "kl_coeff_target", 5e-4)
+            ramp_frac  = getattr(self, "kl_ramp_pct", 0.4)
+            total_steps = (self.args.num_train_epochs
+                        * len(self.train_dataset)
+                        // (self.args.per_device_train_batch_size
+                            * self.args.gradient_accumulation_steps))
+            self.kl_ramp_steps = max(1, int(ramp_frac * total_steps))
+            self._kl_setup_done = True
+
+        step = self.state.global_step
+        kl_coeff = ( self.kl_coeff_target * step / self.kl_ramp_steps
+                    if step < self.kl_ramp_steps else
+                    self.kl_coeff_target )
+
+        # ──────────────────────────────────────────────────────────────
+        # 7. Total loss
+        # ──────────────────────────────────────────────────────────────
+        loss = pref_loss + kl_coeff * kl_loss
+
+        # ──────────────────────────────────────────────────────────────
+        # 8. Log component metrics for Trainer.log()
+        # ──────────────────────────────────────────────────────────────
+        metrics = {
+            "pref_loss":  pref_loss.detach(),
+            "kl_loss":    kl_loss.detach(),
+            "kl_coeff":   torch.tensor(kl_coeff),
+            "chosen_win": (delta > 0).float().mean().detach(),
+        }
+        self.store_metrics(metrics, train_eval="train")
+
+        if return_outputs:
+            return loss, metrics
+        return loss
 
 
 
