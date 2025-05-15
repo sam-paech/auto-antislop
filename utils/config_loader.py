@@ -109,6 +109,7 @@ _FINETUNE: Sequence[str] = (
     "finetune_output_dir_suffix",
     "finetune_save_merged_16bit",
     "finetune_save_gguf_q8_0",
+    "finetune_max_train_examples",
 )
 
 

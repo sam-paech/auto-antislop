@@ -224,9 +224,9 @@ def main():
             should_manage_vllm = False # Don't try to stop it later
     else:
         logger.info("vLLM server management is disabled by config/CLI.")
-        if not is_vllm_server_alive(config['vllm_port']):
-            logger.warning(f"vLLM server management disabled, but no server found on port {config['vllm_port']}. "
-                           "The generation pipeline will likely fail. Please start a vLLM server manually.")
+        #if not is_vllm_server_alive(config['vllm_port']):
+        #    logger.warning(f"vLLM server management disabled, but no server found on port {config['vllm_port']}. "
+        #                   "The generation pipeline will likely fail. Please start a vLLM server manually.")
 
 
     # --- Main Pipeline ---

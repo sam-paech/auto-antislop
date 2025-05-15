@@ -597,6 +597,10 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             split="train"
         )
         dpo_dataset_hf = dpo_dataset_hf.shuffle(seed=config.get("finetune_shuffle_seed", 3407))
+        max_train = config.get("finetune_max_train_examples")
+        if isinstance(max_train, int) and max_train > 0 and len(dpo_dataset_hf) > max_train:
+            dpo_dataset_hf = dpo_dataset_hf.select(range(max_train))
+            logger.info(f"Capped training dataset to {max_train} examples.")
 
         # ── filter malformed rows (prompt / chosen / rejected missing) ──
         req_cols = {"prompt", "chosen", "rejected"}
@@ -632,6 +636,10 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         tdpo_dataset_path = dataset_path
         dpo_dataset_hf = load_tdpo_dataset(tdpo_dataset_path, tokenizer, max_seq_len=max_seq_length)
         dpo_dataset_hf = dpo_dataset_hf.shuffle(seed=config.get("finetune_shuffle_seed", 3407))
+        max_train = config.get("finetune_max_train_examples")
+        if isinstance(max_train, int) and max_train > 0 and len(dpo_dataset_hf) > max_train:
+            dpo_dataset_hf = dpo_dataset_hf.select(range(max_train))
+            logger.info(f"Capped training dataset to {max_train} examples.")
 
     else:
         logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'tdpo'.")

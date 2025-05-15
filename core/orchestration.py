@@ -80,7 +80,7 @@ def _build_generation_command(
         """Resolves a Path object to an absolute path string, or returns None."""
         return str(p.resolve()) if p else None
     
-    output_jsonl_path_str = get_abs_path_str(output_jsonl_path.parent / f"iter_{str(iter_idx)}_tdpo_pairs.jsonl")
+    tdpo_pairs_jsonl_path_str = get_abs_path_str(output_jsonl_path.parent / f"iter_{str(iter_idx)}_tdpo_pairs.jsonl")
 
     # Determine the API base URL for generation requests
     gen_api_base_url = config.get('generation_api_base_url')
@@ -99,14 +99,13 @@ def _build_generation_command(
         "--api-key", config['generation_api_key'],
         "--model-name", config['generation_model_id'],
         "--config", str((main_script_path.parent / "config-example.yaml").resolve()), # provides pipeline defaults that we aren't passing here
-        "--output-jsonl", output_jsonl_path_str,
+        "--output-jsonl", get_abs_path_str(output_jsonl_path),
         "--input-hf-dataset", config['generation_hf_dataset_name'],
         "--hf-dataset-split", config['generation_hf_dataset_split'],
         "--threads", str(config['generation_threads']),
         "--max-prompts", str(config['generation_max_prompts']),
         "--logging-level", config['generation_logging_level'],
-        "--max-new-tokens", str(config['generation_max_new_tokens']),
-        "--chunk-size", str(config['generation_param_chunk_size']),
+        "--max-new-tokens", str(config['generation_max_new_tokens']),        
         "--top-logprobs-count", str(config['generation_param_top_logprobs_count']),
         "--temperature", str(config['generation_param_temperature']),
         "--top-p", str(config['generation_param_top_p']),
@@ -118,6 +117,15 @@ def _build_generation_command(
         "--ngram-language", config['generation_ngram_language'],
     ]
     command = list(command_base) # Create a mutable copy
+
+    # Use full-length chunks for the baseline run (iter_idx == 0);
+    # fall back to the configured chunk size for every later iteration.
+    chunk_size = (
+        config['generation_max_new_tokens']
+        if iter_idx == 0
+        else config['generation_param_chunk_size']
+    )
+    command.extend(["--chunk-size", str(chunk_size)])
 
     # Optional command arguments based on configuration
     if config.get('generation_param_stop_sequences'):
@@ -140,7 +148,7 @@ def _build_generation_command(
         command.extend(["--regex-blocklist-file", ""])
     else:
         # this seems to overlap with another param, should fix
-        command.extend(["--tdpo-pairs-jsonl", output_jsonl_path_str])
+        command.extend(["--tdpo-pairs-jsonl", tdpo_pairs_jsonl_path_str])
 
         # For iterations > 0, use the ban lists determined by the orchestrate_pipeline function.
         if banned_ngrams_file_for_iter:
@@ -284,16 +292,26 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
         logger.info(f"Attempting to resume from {experiment_dir}...")
         max_found_iter = -1
         # Check for successfully completed iterations by looking for their output files
+        max_found_iter = -1
+        need_total = config['generation_max_prompts']
+
         for i in range(config['num_iterations']):
-            iter_output_check = experiment_dir / f"iter_{i}_creative_writing_generations.jsonl"
-            # A more robust check could also verify if analysis results for this iter exist
-            if iter_output_check.exists() and iter_output_check.stat().st_size > 0:
-                max_found_iter = i
-                if i == 0: iter0_output_file_for_dpo = iter_output_check
-                final_iter_output_file_for_dpo = iter_output_check 
-            else:
-                # If an iteration's output is missing, we stop assuming further iterations are complete
-                break 
+            gen_file = experiment_dir / f"iter_{i}_creative_writing_generations.jsonl"
+
+            # Does the file exist at all?
+            if not (gen_file.is_file() and gen_file.stat().st_size):
+                break                                   # nothing (or zero-length) → not complete
+
+            # Does it contain the full prompt set?
+            ids_seen = _load_prompt_ids(gen_file)
+            if len(ids_seen) < need_total:
+                logger.info(
+                    f"Iteration {i} resume-check: {len(ids_seen)}/{need_total} prompts present "
+                    f"({need_total-len(ids_seen)} still missing).")
+                break                                   # incomplete → resume here
+
+            max_found_iter = i                         # this one is done, keep going
+
         
         if max_found_iter >= 0:
             start_iter_idx = max_found_iter + 1
