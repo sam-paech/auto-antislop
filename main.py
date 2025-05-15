@@ -31,9 +31,11 @@ from utils.vllm_manager import start_vllm_server, stop_vllm_server, is_vllm_serv
 from core.orchestration import orchestrate_pipeline
 from core.finetuning import run_dpo_finetune
 
-# --- Basic Logging Setup ---
-# Will be refined based on CLI args
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# --- Basic Logging Setup -------------------------------------------------
+logging.basicConfig(               # root stays at WARNING
+    level=logging.WARNING,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger("auto_antislop_main")
 
 
@@ -163,17 +165,20 @@ def main():
     config = load_pipeline_config(args.config_file)
     config = merge_config_with_cli_args(config, args)
 
-    # --- Refine Logging Setup ---
+    # refine levels once CLI/YAML are merged
     numeric_log_level = getattr(logging, config['log_level'].upper(), logging.INFO)
-    # Get all loggers that might have been created by imports
+
+    # raise only *our* loggers, keep external libs at WARNING
     for name in logging.root.manager.loggerDict:
-        logger_instance = logging.getLogger(name)
-        logger_instance.setLevel(numeric_log_level)
-        # Ensure handlers also respect this level or are more verbose
-        for handler in logger_instance.handlers:
-            handler.setLevel(min(numeric_log_level, handler.level)) # Don't make handler less verbose than logger
-    logging.getLogger().setLevel(numeric_log_level) # Root logger
-    logger.info(f"Logging level set to: {config['log_level'].upper()}")
+        if name.startswith(("auto_antislop", "core", "utils")):
+            l = logging.getLogger(name)
+            l.setLevel(numeric_log_level)
+            for h in l.handlers:
+                h.setLevel(min(numeric_log_level, h.level))
+
+    # keep root at WARNING so torch / dynamo INFO spam is hidden
+    logging.getLogger().setLevel(logging.WARNING)
+    logger.info(f"Logging level for project set to: {config['log_level'].upper()}")
 
 
 
