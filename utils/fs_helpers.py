@@ -23,24 +23,32 @@ def download_nltk_resource(resource_id: str, resource_name: str):
     except Exception as e:
         logger.warning(f"Error checking NLTK '{resource_name}' resource: {e}.")
 
-def create_experiment_dir(base_dir_path: Path, resume_dir: Path = None) -> Path:
-    """Creates a timestamped experiment directory or uses resume_dir."""
-    if resume_dir:
+def create_experiment_dir(base_dir_path: Path, resume_dir: Path | None = None) -> Path:
+    """
+    Determine the directory that the pipeline should work in.
+
+    • When --resume-from-dir is supplied we MUST use that exact path.
+      If the directory is missing or not a directory, raise immediately.
+
+    • When no resume dir is given, create a new timestamped directory under
+      *base_dir_path* (parents created as needed) and return it.
+    """
+    if resume_dir is not None:
         if resume_dir.is_dir():
             logger.info(f"Resuming experiment in existing directory: {resume_dir.resolve()}")
             return resume_dir
-        else:
-            logger.warning(f"Resume directory {resume_dir} not found. Creating a new experiment run.")
+        # hard-fail: the user explicitly asked to resume here
+        raise FileNotFoundError(
+            f"--resume-from-dir was set to '{resume_dir}', "
+            "but that path does not exist or is not a directory."
+        )
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     experiment_dir = base_dir_path / f"run_{timestamp}"
-    try:
-        experiment_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Created experiment directory: {experiment_dir.resolve()}")
-    except OSError as e:
-        logger.error(f"Could not create experiment directory {experiment_dir}: {e}")
-        raise  # Re-raise to halt execution if dir creation fails
+    experiment_dir.mkdir(parents=True, exist_ok=False)
+    logger.info(f"Created experiment directory: {experiment_dir.resolve()}")
     return experiment_dir
+
 
 def ensure_antislop_vllm_config_exists(antislop_vllm_dir: Path):
     """
