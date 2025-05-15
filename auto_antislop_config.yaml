@@ -29,7 +29,7 @@ num_iterations: 2 # Minimum 2 iterations (this is enough to catch most slop)
 generation_step_enabled: true
 # If you set manage_vllm=true, leave the base url unset
 #generation_api_base_url: "http://localhost:8000/v1"
-generation_api_base_url: "https://apjmbtwbrb8t61-8888.proxy.runpod.net/v1"
+#generation_api_base_url: "https://apjmbtwbrb8t61-8888.proxy.runpod.net/v1"
 generation_model_id: "unsloth/gemma-3-4b-it" # Model name for generation requests
 generation_api_key: "xxx" # API key for the vLLM server
 generation_max_new_tokens: 2000

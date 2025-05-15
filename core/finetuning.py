@@ -37,9 +37,7 @@ import os
 import torch # Keep torch as it might be used for GPU checks earlier if needed
 from pathlib import Path
 # typing.Optional can be imported at the top level if used in type hints outside the function
-from typing import Optional 
-from trl import DPOTrainer
-from datasets import load_dataset
+from typing import Optional, List, Dict, Any
 from torch.utils.data import default_collate
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
@@ -423,48 +421,71 @@ class LastTokenDPOTrainer(DPOTrainer):
 
 
 def load_tdpo_dataset(
-        path: Path,
-        tokenizer,
-        max_seq_len: int = 4096,
+    path: Path,
+    tokenizer,
+    max_seq_len: int = 4096,
 ):
-    ds = load_dataset("json", data_files=str(path), split="train")
-    tokenizer.truncation_side = "left"          # keep this, but DO NOT truncate here
+    """
+    Load a TDPO jsonl file, drop rows that break the TDPO assumptions, and return an
+    HF Dataset whose items contain:
+        • prompt_ids         – list[int]
+        • chosen_token_id    – int
+        • rejected_token_id  – int
+    Only the *final* token of each suffix is kept (TDPO).
+    """
 
-    def _tokenise_row(example):
-        prompt_ids = tokenizer(
+    ds = load_dataset("json", data_files=str(path), split="train")
+    tokenizer.truncation_side = "left"      # do *not* truncate the prompt itself
+
+    def _tokenise_row(example: Dict[str, Any]) -> Dict[str, Any]:
+        """Tokenise one jsonl row and attach '__valid' flag."""
+        # ---------- prompt -------------------------------------------------
+        prompt_ids: List[int] = tokenizer(
             example["context_with_chat_template"],
             add_special_tokens=False,
-            truncation=False,                   # <--- no truncation
+            truncation=False,               # keep full prompt
             return_attention_mask=False,
         ).input_ids
 
-        # drop if prompt alone already exceeds the budget
-        if len(prompt_ids) + 1 > max_seq_len:   # +1 for the label token
-            return {"__valid": False}
+        # ---------- basic sanity checks -----------------------------------
+        #   – prompt must leave space for one label token
+        prompt_too_long = len(prompt_ids) + 1 > max_seq_len
 
+        #   – suffix tokenisation
         chosen_ids   = tokenizer(example["chosen_decoded"],
                                  add_special_tokens=False).input_ids
         rejected_ids = tokenizer(example["rejected_decoded"],
                                  add_special_tokens=False).input_ids
 
-        if not chosen_ids or not rejected_ids:
-            return {"__valid": False}
-        if chosen_ids[-1] == rejected_ids[-1]:
-            return {"__valid": False}
+        suffix_empty      = not chosen_ids or not rejected_ids
+        same_last_token   = not suffix_empty and chosen_ids[-1] == rejected_ids[-1]
 
-        # **only the final token** is kept for TDPO, so no further length check
+        is_valid = not (prompt_too_long or suffix_empty or same_last_token)
+
+        if not is_valid:
+            # Arrow needs *every* column present in *every* row ➔ fill dummies
+            return {
+                "prompt_ids":         [],     # dropped later
+                "chosen_token_id":     0,
+                "rejected_token_id":   0,
+                "__valid":            False,
+            }
+
         return {
-            "prompt_ids": prompt_ids,
-            "chosen_token_id":   chosen_ids[-1],
-            "rejected_token_id": rejected_ids[-1],
-            "__valid": True,
+            "prompt_ids":         prompt_ids,
+            "chosen_token_id":    chosen_ids[-1],
+            "rejected_token_id":  rejected_ids[-1],
+            "__valid":            True,
         }
 
+    # map → filter → strip helper column
     ds = ds.map(_tokenise_row, remove_columns=ds.column_names)
     ds = ds.filter(lambda ex: ex["__valid"])
     ds = ds.remove_columns("__valid")
+
     if len(ds) == 0:
         raise ValueError("all TDPO rows exceeded max_seq_len or failed sanity checks")
+
     return ds
 
 
