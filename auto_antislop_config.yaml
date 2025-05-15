@@ -10,11 +10,11 @@ manage_vllm: true
 vllm_model_id: "unsloth/gemma-3-4b-it" # Model served by vLLM
 vllm_port: 8000
 vllm_hf_token: null # Optional: Your Hugging Face token if model is gated
-vllm_cuda_visible_devices: "0"
+vllm_cuda_visible_devices: "0"  # set to e.g. "0,1,2,3" for multiple gpus
 vllm_gpu_memory_utilization: 0.95
 vllm_max_model_len: 2500
 vllm_dtype: "bfloat16"
-# Additional raw CLI arguments for vLLM server, e.g., ["--tensor-parallel-size", "2"]
+# Additional raw CLI arguments for vLLM server, e.g., ["--tensor-parallel-size", "4"] for multiple gpus
 vllm_extra_args: []
 
 
@@ -50,7 +50,7 @@ generation_param_temperature: 0.7
 generation_param_top_p: 1.0
 generation_param_top_k: 50
 generation_param_min_p: 0.05
-generation_param_timeout: 120
+generation_param_timeout: 480
 generation_param_stop_sequences: [] # e.g., ["\n\n", "---"]
 
 # Parameters for antislop-vllm's backtracking (passed as individual CLI args)
@@ -140,3 +140,7 @@ finetune_output_dir_suffix: "_tdpo_exp01" # Appended to experiment run dir
 finetune_save_merged_16bit: true
 finetune_save_gguf_q8_0: false
 finetune_max_train_examples: 5000 # adjust as needed
+# --- TDPO sample regularisation
+# 0 = off; 0.9 strongly downsamples overrepresented rule violations
+# (this is useful because the raw generated dataset is typically very skewed)
+finetune_tdpo_sample_regularisation_strength: 0.8

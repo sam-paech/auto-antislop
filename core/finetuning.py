@@ -423,70 +423,83 @@ class LastTokenDPOTrainer(DPOTrainer):
 def load_tdpo_dataset(
     path: Path,
     tokenizer,
+    *,
     max_seq_len: int = 4096,
+    rule_reg_strength: float = 0.0,
 ):
     """
-    Load a TDPO jsonl file, drop rows that break the TDPO assumptions, and return an
-    HF Dataset whose items contain:
-        • prompt_ids         – list[int]
-        • chosen_token_id    – int
-        • rejected_token_id  – int
-    Only the *final* token of each suffix is kept (TDPO).
+    Read a TDPO jsonl file → HF Dataset of prompt-ids & final-token ids.
+    If rule_reg_strength > 0, re-sample the examples so that over-frequent
+    validator.rules are down-weighted.  Output size stays identical.
     """
 
-    ds = load_dataset("json", data_files=str(path), split="train")
-    tokenizer.truncation_side = "left"      # do *not* truncate the prompt itself
+    import random
+    import numpy as np
+    from collections import Counter
 
-    def _tokenise_row(example: Dict[str, Any]) -> Dict[str, Any]:
-        """Tokenise one jsonl row and attach '__valid' flag."""
-        # ---------- prompt -------------------------------------------------
-        prompt_ids: List[int] = tokenizer(
-            example["context_with_chat_template"],
+    # ── raw load -----------------------------------------------------------
+    ds = load_dataset("json", data_files=str(path), split="train")
+
+    # ── optional rule-balanced re-sample ----------------------------------
+    if rule_reg_strength and rule_reg_strength > 0:
+        # collect rule for every row (None if missing)
+        rules = [
+            ex["validator"]["rule"] if isinstance(ex.get("validator"), dict) else None
+            for ex in ds
+        ]
+        counts = Counter(r for r in rules if r is not None)
+        if counts:
+            thresh = np.median(list(counts.values()))
+            w_rule = {
+                r: 1.0 if c <= thresh else (thresh / c) ** rule_reg_strength
+                for r, c in counts.items()
+            }
+            w_example = [w_rule.get(r, 1.0) for r in rules]
+            probs = np.asarray(w_example, dtype=np.float64)
+            probs /= probs.sum()
+
+            rng = np.random.default_rng(3407)            # reproducible
+            idx = rng.choice(len(ds), size=len(ds), replace=False, p=probs)
+            idx.sort()
+            ds = ds.select(idx.tolist())
+
+    # ── tokenisation / sanity checks --------------------------------------
+    tokenizer.truncation_side = "left"
+
+    def _tok(ex):
+        prompt_ids = tokenizer(
+            ex["context_with_chat_template"],
             add_special_tokens=False,
-            truncation=False,               # keep full prompt
+            truncation=False,
             return_attention_mask=False,
         ).input_ids
 
-        # ---------- basic sanity checks -----------------------------------
-        #   – prompt must leave space for one label token
-        prompt_too_long = len(prompt_ids) + 1 > max_seq_len
+        ch_ids = tokenizer(ex["chosen_decoded"],   add_special_tokens=False).input_ids
+        rj_ids = tokenizer(ex["rejected_decoded"], add_special_tokens=False).input_ids
 
-        #   – suffix tokenisation
-        chosen_ids   = tokenizer(example["chosen_decoded"],
-                                 add_special_tokens=False).input_ids
-        rejected_ids = tokenizer(example["rejected_decoded"],
-                                 add_special_tokens=False).input_ids
-
-        suffix_empty      = not chosen_ids or not rejected_ids
-        same_last_token   = not suffix_empty and chosen_ids[-1] == rejected_ids[-1]
-
-        is_valid = not (prompt_too_long or suffix_empty or same_last_token)
-
-        if not is_valid:
-            # Arrow needs *every* column present in *every* row ➔ fill dummies
-            return {
-                "prompt_ids":         [],     # dropped later
-                "chosen_token_id":     0,
-                "rejected_token_id":   0,
-                "__valid":            False,
-            }
+        ok = (
+            len(prompt_ids) + 1 <= max_seq_len
+            and ch_ids and rj_ids
+            and ch_ids[-1] != rj_ids[-1]
+        )
+        if not ok:
+            return {"__valid": False}
 
         return {
-            "prompt_ids":         prompt_ids,
-            "chosen_token_id":    chosen_ids[-1],
-            "rejected_token_id":  rejected_ids[-1],
-            "__valid":            True,
+            "prompt_ids": prompt_ids,
+            "chosen_token_id":   ch_ids[-1],
+            "rejected_token_id": rj_ids[-1],
+            "__valid": True,
         }
 
-    # map → filter → strip helper column
-    ds = ds.map(_tokenise_row, remove_columns=ds.column_names)
-    ds = ds.filter(lambda ex: ex["__valid"])
-    ds = ds.remove_columns("__valid")
+    ds = ds.map(_tok, remove_columns=ds.column_names)
+    ds = ds.filter(lambda ex: ex["__valid"]).remove_columns("__valid")
 
     if len(ds) == 0:
-        raise ValueError("all TDPO rows exceeded max_seq_len or failed sanity checks")
+        raise ValueError("no TDPO samples survived length / sanity checks")
 
-    return ds
+    return ds.shuffle(seed=3407)
+
 
 
 def freeze_early_layers(model, n_unfrozen: int = 4, verbose: bool = True):
@@ -641,7 +654,11 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
         # defer actual loading until tokenizer is ready
         tdpo_dataset_path = dataset_path
-        dpo_dataset_hf = load_tdpo_dataset(tdpo_dataset_path, tokenizer, max_seq_len=max_seq_length)
+        dpo_dataset_hf = load_tdpo_dataset(
+            tdpo_dataset_path, tokenizer,
+            max_seq_len          = max_seq_length,
+            rule_reg_strength    = config.get("finetune_tdpo_sample_regularisation_strength", 0.0),
+        )
         dpo_dataset_hf = dpo_dataset_hf.shuffle(seed=config.get("finetune_shuffle_seed", 3407))
         max_train = config.get("finetune_max_train_examples")
         if isinstance(max_train, int) and max_train > 0 and len(dpo_dataset_hf) > max_train:

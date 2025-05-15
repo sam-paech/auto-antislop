@@ -110,6 +110,7 @@ _FINETUNE: Sequence[str] = (
     "finetune_save_merged_16bit",
     "finetune_save_gguf_q8_0",
     "finetune_max_train_examples",
+    "finetune_tdpo_sample_regularisation_strength",
 )
 
 

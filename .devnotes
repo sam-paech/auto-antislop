@@ -1,10 +1,7 @@
 # updating submodules:
 
-# 1.  Fetch the newest commits for every submodule and fast-forward
 git submodule update --remote --merge        # add the submodule path to update just one
-
-# 2.  Record the new SHA(s) in the parent repo
-git add antislop-vllm                        # or `git add path/to/others`
+git add antislop-vllm  # 2.  Record the new SHA(s) in the parent repo
 git commit -m "Update submodule antislop-vllm to latest"
 
 # 2.  Record the new SHA(s) in the parent repo
