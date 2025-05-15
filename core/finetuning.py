@@ -423,92 +423,50 @@ class LastTokenDPOTrainer(DPOTrainer):
 
 
 def load_tdpo_dataset(
-    path: Path,
-    tokenizer,
-    max_seq_len: int = 4096,
-) -> "datasets.Dataset":
-    """
-    Load a TDPO jsonl file and enforce (with diagnostics) the
-    “identical-until-last-token” assumption.
-
-    Behaviour
-    ---------
-    • If the *last* token of the chosen / rejected suffix is identical
-      ➔ log *error*, drop that row.
-    • Otherwise we always *keep* the row, but:
-        – If either suffix has >1 token after tokenisation **or**
-        – If any earlier token differs between suffixes,
-          ➔ log *warning* including the divergent tokens.
-    • For training we still use ONLY the *final* token of each suffix.
-
-    Expected columns in the jsonl:
-        context_with_chat_template, chosen_decoded, rejected_decoded
-    """
+        path: Path,
+        tokenizer,
+        max_seq_len: int = 4096,
+):
     ds = load_dataset("json", data_files=str(path), split="train")
-    tokenizer.truncation_side = "left"
+    tokenizer.truncation_side = "left"          # keep this, but DO NOT truncate here
 
     def _tokenise_row(example):
-        # ------- encode prompt ---------------------------------------------
-        prompt_enc = tokenizer(
+        prompt_ids = tokenizer(
             example["context_with_chat_template"],
             add_special_tokens=False,
-            truncation=True,
-            max_length=max_seq_len - 1,
+            truncation=False,                   # <--- no truncation
             return_attention_mask=False,
-        )
+        ).input_ids
 
-        # ------- encode suffixes -------------------------------------------
+        # drop if prompt alone already exceeds the budget
+        if len(prompt_ids) + 1 > max_seq_len:   # +1 for the label token
+            return {"__valid": False}
+
         chosen_ids   = tokenizer(example["chosen_decoded"],
                                  add_special_tokens=False).input_ids
         rejected_ids = tokenizer(example["rejected_decoded"],
                                  add_special_tokens=False).input_ids
 
-        # Empty suffix -> unusable row
         if not chosen_ids or not rejected_ids:
-            logger.error("Empty suffix detected – dropping row.")
+            return {"__valid": False}
+        if chosen_ids[-1] == rejected_ids[-1]:
             return {"__valid": False}
 
-        last_same = chosen_ids[-1] == rejected_ids[-1]
-        prefix_diff = (
-            len(chosen_ids) > 1
-            or len(rejected_ids) > 1
-            or chosen_ids[:-1] != rejected_ids[:-1]
-        )
-
-        if last_same:
-            logger.error(
-                "Chosen / rejected share identical last token – "
-                "dropping row. "
-                f"Tokens: {tokenizer.convert_ids_to_tokens(chosen_ids)}"
-            )
-            return {"__valid": False}
-
-        if prefix_diff:
-            logger.warning(
-                "Suffixes diverge before last token. "
-                f"chosen={tokenizer.convert_ids_to_tokens(chosen_ids)}, "
-                f"rejected={tokenizer.convert_ids_to_tokens(rejected_ids)}"
-            )
-
+        # **only the final token** is kept for TDPO, so no further length check
         return {
-            "prompt_ids": prompt_enc.input_ids,
+            "prompt_ids": prompt_ids,
             "chosen_token_id":   chosen_ids[-1],
             "rejected_token_id": rejected_ids[-1],
             "__valid": True,
         }
 
     ds = ds.map(_tokenise_row, remove_columns=ds.column_names)
-    total = len(ds)
     ds = ds.filter(lambda ex: ex["__valid"])
-    kept = len(ds)
-    logger.info(f"TDPO dataset: kept {kept}/{total} rows "
-                f"({total - kept} dropped for identical last token).")
-
     ds = ds.remove_columns("__valid")
-    if kept == 0:
-        raise ValueError("No valid rows remaining after TDPO sanity check.")
-
+    if len(ds) == 0:
+        raise ValueError("all TDPO rows exceeded max_seq_len or failed sanity checks")
     return ds
+
 
 def freeze_early_layers(model, n_unfrozen: int = 4, verbose: bool = True):
     # ── unwrap PEFT wrappers ──────────────────────────────────────────
@@ -596,6 +554,34 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             data_files=str(dataset_path),
             split="train"
         )
+
+        # ----------------------------------------------------------
+        #   discard rows whose prompt+continuation would overflow
+        # ----------------------------------------------------------
+        def _within_len(example):
+            prompt_ids = tokenizer(example["prompt"],
+                                add_special_tokens=False).input_ids
+            chosen_ids = tokenizer(example["chosen"],
+                                add_special_tokens=False).input_ids
+            rejected_ids = tokenizer(example["rejected"],
+                                    add_special_tokens=False).input_ids
+            max_len = config['finetune_max_seq_length']
+            return (
+                len(prompt_ids) + len(chosen_ids) <= max_len
+                and
+                len(prompt_ids) + len(rejected_ids) <= max_len
+            )
+
+        before = len(dpo_dataset_hf)
+        dpo_dataset_hf = dpo_dataset_hf.filter(_within_len)
+        after  = len(dpo_dataset_hf)
+        logger.info(f"DPO length filter: kept {after}/{before} examples "
+                    f"(max_seq_len = {config['finetune_max_seq_length']})")
+
+        if after == 0:
+            raise ValueError("every DPO sample exceeded finetune_max_seq_length")
+
+
         dpo_dataset_hf = dpo_dataset_hf.shuffle(seed=config.get("finetune_shuffle_seed", 3407))
         max_train = config.get("finetune_max_train_examples")
         if isinstance(max_train, int) and max_train > 0 and len(dpo_dataset_hf) > max_train:
