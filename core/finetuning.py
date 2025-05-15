@@ -786,6 +786,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             bf16=use_bf16,
             fp16=use_fp16, # Ensure only one is true or both false
             remove_unused_columns=False,
+            disable_tqdm=False,
         ),
     )
 
