@@ -482,14 +482,20 @@ def load_tdpo_dataset(
             and ch_ids and rj_ids
             and ch_ids[-1] != rj_ids[-1]
         )
-        if not ok:
-            return {"__valid": False}
+        if not ok:                     # ← prompt too long, empty suffix, etc.
+            # *** keep the full column set so Arrow’s schema never changes ***
+            return {
+                "prompt_ids":        [],     # placeholder
+                "chosen_token_id":    0,
+                "rejected_token_id":  0,
+                "__valid":           False,
+            }
 
         return {
-            "prompt_ids": prompt_ids,
+            "prompt_ids":       prompt_ids,
             "chosen_token_id":   ch_ids[-1],
             "rejected_token_id": rj_ids[-1],
-            "__valid": True,
+            "__valid":           True,
         }
 
     ds = ds.map(_tok, remove_columns=ds.column_names)
