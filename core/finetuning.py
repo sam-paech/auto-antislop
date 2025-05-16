@@ -21,6 +21,7 @@ import logging
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 import os
+import json
 logger = logging.getLogger(__name__)
 
 def load_imports():
@@ -736,7 +737,78 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'tdpo'.")
         return
 
-    
+
+
+    CALC_VAL_STATS = True
+    if CALC_VAL_STATS:
+        def _gap_stats(model, dataset, collate_fn, tag, batch_size=32):
+            model.eval()
+            loader = DataLoader(dataset,
+                                batch_size=batch_size,
+                                shuffle=False,
+                                collate_fn=collate_fn,
+                                pin_memory=True)
+
+            rows, total_delta, correct = [], 0.0, 0
+            with torch.no_grad():
+                for batch in loader:
+                    ids   = batch["prompt_ids"      ].to(model.device)
+                    attn  = batch["attention_mask"  ].to(model.device)
+                    good  = batch["chosen_token_id" ].to(model.device)
+                    bad   = batch["rejected_token_id"].to(model.device)
+
+                    last  = attn.sum(1) - 1
+                    out   = model(ids, attention_mask=attn, use_cache=False)
+                    logits_last = out.logits[torch.arange(ids.size(0)), last]
+
+                    logp_good = torch.log_softmax(logits_last, -1).gather(-1, good.unsqueeze(-1)).squeeze(-1)
+                    logp_bad  = torch.log_softmax(logits_last, -1).gather(-1, bad .unsqueeze(-1)).squeeze(-1)
+                    delta     = (logp_good - logp_bad).cpu()
+
+                    total_delta += delta.sum().item()
+                    correct     += (delta > 0).sum().item()
+
+                    for d, g, b in zip(delta.tolist(), good.tolist(), bad.tolist()):
+                        rows.append({"delta": round(d, 6), "chosen_id": g, "rejected_id": b})
+
+            mean   = total_delta / len(dataset)
+            acc    = correct / len(dataset)
+            stamp  = {"tag": tag, "mean_delta": mean, "chosen_win": acc, "n": len(dataset)}
+            return rows, stamp
+        # ────────────────────────────────────────────────────────────────────
+        # 1) train / validation split  (after max-train cap, before model load)
+        # ────────────────────────────────────────────────────────────────────
+        VAL_N    = min(1000, int(0.1 * len(dpo_dataset_hf)))
+        train_ds = dpo_dataset_hf.select(range(len(dpo_dataset_hf) - VAL_N))
+        val_ds   = dpo_dataset_hf.select(range(len(dpo_dataset_hf) - VAL_N, len(dpo_dataset_hf)))
+
+        logger.info(f"Split → train {len(train_ds)}  | val {len(val_ds)}")
+
+        # Save a copy for the trainer
+        dpo_dataset_hf = train_ds
+        # (val_ds is only for analysis; we’re not doing eval during training.)
+        # ────────────────────────────────────────────────────────────────────
+        # 2) PRE-TRAIN statistics
+        # ────────────────────────────────────────────────────────────────────
+        analysis_dir = experiment_run_dir / "logprob_gap_analysis"
+        analysis_dir.mkdir(exist_ok=True)
+
+        pre_train_rows, pre_train_stats = _gap_stats(
+            model, train_ds, LastTokenDPOTrainer.tdpo_collator, "train_pre")
+        pre_val_rows , pre_val_stats  = _gap_stats(
+            model, val_ds  , LastTokenDPOTrainer.tdpo_collator, "val_pre")
+
+        with open(analysis_dir / "train_pre.jsonl", "w") as f:
+            for r in pre_train_rows: f.write(json.dumps(r) + "\n")
+        with open(analysis_dir / "val_pre.jsonl", "w") as f:
+            for r in pre_val_rows:  f.write(json.dumps(r) + "\n")
+
+        print("\n— PRE-TRAIN SUMMARY —")
+        print(pre_train_stats)
+        print(pre_val_stats)
+        print("sample train rows:", pre_train_rows[:10])
+        print("sample val rows  :", pre_val_rows [:10])
+
     
     
     try:
@@ -861,6 +933,29 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     except Exception as e:
         logger.error(f"Error during training: {e}", exc_info=True)
         return
+    
+
+
+    if CALC_VAL_STATS:
+        # ────────────────────────────────────────────────────────────────────
+        # 3) POST-TRAIN statistics  (same API as above)
+        # ────────────────────────────────────────────────────────────────────
+        post_train_rows, post_train_stats = _gap_stats(
+            model, train_ds, dpo_trainer.data_collator, "train_post")
+        post_val_rows , post_val_stats  = _gap_stats(
+            model, val_ds  , dpo_trainer.data_collator, "val_post")
+
+        with open(analysis_dir / "train_post.jsonl", "w") as f:
+            for r in post_train_rows: f.write(json.dumps(r) + "\n")
+        with open(analysis_dir / "val_post.jsonl", "w") as f:
+            for r in post_val_rows:  f.write(json.dumps(r) + "\n")
+
+        print("\n— POST-TRAIN SUMMARY —")
+        print(post_train_stats)
+        print(post_val_stats)
+        print("sample train rows:", post_train_rows[:10])
+        print("sample val rows  :", post_val_rows [:10])
+
     
     
 
