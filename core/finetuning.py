@@ -195,6 +195,7 @@ def load_tdpo_dataset(
         # ── Reject rows where the suffix is not exactly ONE token ───────────
         if len(ch_ids) != 1 or len(rj_ids) != 1:
             _tok.multi_tok_rows += 1
+            print('! failed tokenisation', len(ch_ids), len(rj_ids), ex["chosen_decoded"], ex["rejected_decoded"])
             return {
                 "prompt_ids":        [],     # placeholder
                 "chosen_token_id":    0,
