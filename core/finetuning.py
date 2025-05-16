@@ -185,8 +185,22 @@ def load_tdpo_dataset(
             return_attention_mask=False,
         ).input_ids
 
+        #ch_ids = tokenizer(ex["chosen_decoded"],   add_special_tokens=False).input_ids
+        #rj_ids = tokenizer(ex["rejected_decoded"], add_special_tokens=False).input_ids
+
+        # tokenize the candidate suffixes *as-is* (could include the ▁ boundary)
         ch_ids = tokenizer(ex["chosen_decoded"],   add_special_tokens=False).input_ids
         rj_ids = tokenizer(ex["rejected_decoded"], add_special_tokens=False).input_ids
+
+        # ── Reject rows where the suffix is not exactly ONE token ───────────
+        if len(ch_ids) != 1 or len(rj_ids) != 1:
+            _tok.multi_tok_rows += 1
+            return {
+                "prompt_ids":        [],     # placeholder
+                "chosen_token_id":    0,
+                "rejected_token_id":  0,
+                "__valid":           False,
+            }  # schema will be padded later
 
         ok = (
             len(prompt_ids) + 1 <= max_seq_len
@@ -573,7 +587,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 ref_good = F.log_softmax(ref_logits_last, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
                 ref_bad  = F.log_softmax(ref_logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
 
-            if True: # normal path
+            if False: # normal path
                 # ── preference loss (only last-token path) ----------------------------
                 delta     = (logp_good - ref_good) - (logp_bad - ref_bad)
                 #pref_loss = -F.logsigmoid(self.beta * delta).mean()
@@ -591,9 +605,12 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
             loss = pref_loss + kl_loss                       # kl_loss is zero, but left for clarity
 
+            rho         = logp_good - logp_bad
+            choice_win  = (rho > 0).float().mean().detach()
             metrics = {
                 "pref_loss":  pref_loss.detach(),
-                "chosen_win": (delta > 0).float().mean().detach(),
+                #"chosen_win": (delta > 0).float().mean().detach(),
+                "choice_win": choice_win,              # ← new behaviour metric
             }
             self.store_metrics(metrics, train_eval="train")
 
