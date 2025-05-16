@@ -858,22 +858,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                     lp_good = torch.log_softmax(logits_last, -1).gather(-1, good.unsqueeze(-1)).squeeze(-1)
                     lp_bad  = torch.log_softmax(logits_last, -1).gather(-1, bad .unsqueeze(-1)).squeeze(-1)
 
-                    # --- reference forward --------------------------------------------
-                    if ref_model is None and use_null_ref:
-                        #with model.null_ref_context():
-                        ref_logits = model(ids, attention_mask=attn).logits
-                    elif ref_model is not None:
-                        ref_logits = ref_model(ids, attention_mask=attn).logits
-                    else:                       # no reference term → use raw gap
-                        ref_logits = None
-
-                    if ref_logits is not None:
-                        ref_last  = ref_logits[torch.arange(ids.size(0)), last]
-                        ref_good  = torch.log_softmax(ref_last, -1).gather(-1, good.unsqueeze(-1)).squeeze(-1)
-                        ref_bad   = torch.log_softmax(ref_last,  -1).gather(-1, bad .unsqueeze(-1)).squeeze(-1)
-                        delta = (lp_good - ref_good) - (lp_bad - ref_bad)
-                    else:
-                        delta = lp_good - lp_bad
+                    
+                    delta = lp_good - lp_bad
 
                     tot_delta += delta.sum().item()
                     wins      += (delta > 0).sum().item()
