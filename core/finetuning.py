@@ -808,10 +808,24 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     )
 
     logger.info(f"Starting training. Output will be in {finetune_output_dir}. Check tensorboard for progress.")
-    logger.info("DPO training finished.")
+
+    try:
+        trainer_stats = dpo_trainer.train()
+        logger.info("DPO training finished.")
+        if hasattr(trainer_stats, 'metrics'):
+            logger.info(f"Trainer metrics: {trainer_stats.metrics}")
+    except Exception as e:
+        logger.error(f"Error during training: {e}", exc_info=True)
+        return
+    
+    
 
     # ── Quick sanity-check inference BEFORE merging ───────────────────────
     try:
+        trainer_stats = dpo_trainer.train()
+        logger.info("DPO training finished.")
+        if hasattr(trainer_stats, 'metrics'):
+            logger.info(f"Trainer metrics: {trainer_stats.metrics}")
         test_prompt = (
             config.get("finetune_quick_test_prompt")                    # optional YAML/CLI override
             or "You are a creative storyteller.\n\n"
