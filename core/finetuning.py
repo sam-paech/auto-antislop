@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING
 
+# placeholders for later lazy loading
 if TYPE_CHECKING:
     from unsloth import FastLanguageModel as FastLanguageModelType
     from transformers import AutoTokenizer as AutoTokenizerType
@@ -9,10 +10,8 @@ if TYPE_CHECKING:
     from trl import DPOTrainer as DPOTrainerType, DPOConfig as DPOConfigType
     from datasets import Dataset as DatasetType
     from unsloth.chat_templates import get_chat_template as get_chat_template_type
-    import os
     import torch # Keep torch as it might be used for GPU checks earlier if needed    
     # typing.Optional can be imported at the top level if used in type hints outside the function
-    from typing import Optional, List, Dict, Any
     from torch.utils.data import default_collate
     import torch.nn.functional as F
     from torch.nn.utils.rnn import pad_sequence    
@@ -20,6 +19,8 @@ if TYPE_CHECKING:
 
 import logging
 from pathlib import Path
+from typing import Optional, List, Dict, Any
+import os
 logger = logging.getLogger(__name__)
 
 def load_imports():
@@ -32,17 +33,25 @@ def load_imports():
         from trl import DPOTrainer, DPOConfig
         from datasets import load_dataset
         from unsloth.chat_templates import get_chat_template
-        
-        # Make these available in the function's local scope for convenience
-        # Or, you can just use them directly as `unsloth.FastLanguageModel` etc.
-        # For cleaner code within the function, assigning to local variables is fine.
+        import torch
+        from torch.utils.data import default_collate
+        import torch.nn.functional as F
+        from torch.nn.utils.rnn import pad_sequence
+
+        # Make all imports available in the global scope
         globals()['FastLanguageModel'] = FastLanguageModel
         globals()['AutoTokenizer'] = AutoTokenizer
         globals()['TextStreamer'] = TextStreamer
+        globals()['AutoModelForCausalLM'] = AutoModelForCausalLM
+        globals()['PeftModel'] = PeftModel
         globals()['DPOTrainer'] = DPOTrainer
         globals()['DPOConfig'] = DPOConfig
         globals()['load_dataset'] = load_dataset
         globals()['get_chat_template'] = get_chat_template
+        globals()['torch'] = torch
+        globals()['default_collate'] = default_collate
+        globals()['F'] = F
+        globals()['pad_sequence'] = pad_sequence
         
         logger.info("Unsloth and DPO finetuning libraries loaded successfully.")
     except ImportError as e:
@@ -51,13 +60,8 @@ def load_imports():
         #return # Exit if essential libraries can't be loaded
 
 
-    import os
-    import torch # Keep torch as it might be used for GPU checks earlier if needed    
-    # typing.Optional can be imported at the top level if used in type hints outside the function
-    from typing import Optional, List, Dict, Any
-    from torch.utils.data import default_collate
-    import torch.nn.functional as F
-    from torch.nn.utils.rnn import pad_sequence
+    
+    
 
 
     # ── QUIET-MODE FOR DATASETS / TRANSFORMERS ────────────────────────────
