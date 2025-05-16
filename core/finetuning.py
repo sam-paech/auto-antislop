@@ -777,40 +777,54 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                         rejected_token_id=rejected)
 
         from torch.utils.data import DataLoader
-        def _gap_stats(model, dataset, collate_fn, tag, batch_size=4):
+        def _gap_stats(model, dataset, collate_fn, tag,
+               ref_model=None, use_null_ref=False, batch_size=32):
             model.eval()
-            loader = DataLoader(dataset,
-                                batch_size=batch_size,
-                                shuffle=False,
-                                collate_fn=collate_fn,
-                                pin_memory=True)
+            loader = DataLoader(dataset, batch_size=batch_size,
+                                shuffle=False, collate_fn=collate_fn)
 
-            rows, total_delta, correct = [], 0.0, 0
+            rows, tot_delta, wins = [], 0.0, 0
             with torch.no_grad():
                 for batch in loader:
-                    ids   = batch["prompt_ids"      ].to(model.device)
-                    attn  = batch["attention_mask"  ].to(model.device)
-                    good  = batch["chosen_token_id" ].to(model.device)
+                    ids   = batch["prompt_ids"     ].to(model.device)
+                    attn  = batch["attention_mask" ].to(model.device)
+                    good  = batch["chosen_token_id"].to(model.device)
                     bad   = batch["rejected_token_id"].to(model.device)
-
                     last  = attn.sum(1) - 1
-                    out   = model(ids, attention_mask=attn, use_cache=False)
-                    logits_last = out.logits[torch.arange(ids.size(0)), last]
 
-                    logp_good = torch.log_softmax(logits_last, -1).gather(-1, good.unsqueeze(-1)).squeeze(-1)
-                    logp_bad  = torch.log_softmax(logits_last, -1).gather(-1, bad .unsqueeze(-1)).squeeze(-1)
-                    delta     = (logp_good - logp_bad).cpu()
+                    # --- policy forward ------------------------------------------------
+                    logits = model(ids, attention_mask=attn).logits
+                    logits_last = logits[torch.arange(ids.size(0)), last]
+                    lp_good = torch.log_softmax(logits_last, -1).gather(-1, good.unsqueeze(-1)).squeeze(-1)
+                    lp_bad  = torch.log_softmax(logits_last, -1).gather(-1, bad .unsqueeze(-1)).squeeze(-1)
 
-                    total_delta += delta.sum().item()
-                    correct     += (delta > 0).sum().item()
+                    # --- reference forward --------------------------------------------
+                    if ref_model is None and use_null_ref:
+                        with model.null_ref_context():
+                            ref_logits = model(ids, attention_mask=attn).logits
+                    elif ref_model is not None:
+                        ref_logits = ref_model(ids, attention_mask=attn).logits
+                    else:                       # no reference term → use raw gap
+                        ref_logits = None
 
-                    for d, g, b in zip(delta.tolist(), good.tolist(), bad.tolist()):
-                        rows.append({"delta": round(d, 6), "chosen_id": g, "rejected_id": b})
+                    if ref_logits is not None:
+                        ref_last  = ref_logits[torch.arange(ids.size(0)), last]
+                        ref_good  = torch.log_softmax(ref_last, -1).gather(-1, good.unsqueeze(-1)).squeeze(-1)
+                        ref_bad   = torch.log_softmax(ref_last,  -1).gather(-1, bad .unsqueeze(-1)).squeeze(-1)
+                        delta = (lp_good - ref_good) - (lp_bad - ref_bad)
+                    else:
+                        delta = lp_good - lp_bad
 
-            mean   = total_delta / len(dataset)
-            acc    = correct / len(dataset)
-            stamp  = {"tag": tag, "mean_delta": mean, "chosen_win": acc, "n": len(dataset)}
-            return rows, stamp
+                    tot_delta += delta.sum().item()
+                    wins      += (delta > 0).sum().item()
+
+                    rows.extend([{"delta": round(d, 6), "chosen_id": g.item(), "rejected_id": b.item()}
+                                for d, g, b in zip(delta, good, bad)])
+
+            mean = tot_delta / len(dataset)
+            acc  = wins / len(dataset)
+            return rows, {"tag": tag, "mean_delta": mean, "chosen_win": acc, "n": len(dataset)}
+
         # ────────────────────────────────────────────────────────────────────
         # 1) train / validation split  (after max-train cap, before model load)
         # ────────────────────────────────────────────────────────────────────
@@ -832,8 +846,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         pad_id = tokenizer.pad_token_id
         collate = lambda feats: _collate_tdpo(feats, pad_id, max_seq_length)
 
-        pre_train_rows, pre_train_stats = _gap_stats(model, train_ds, collate, "train_pre")
-        pre_val_rows , pre_val_stats   = _gap_stats(model, val_ds,   collate, "val_pre")
+        pre_train_rows, pre_train_stats = _gap_stats(model, train_ds, collate, "train_pre", ref_model=None, use_null_ref=True)
+        pre_val_rows , pre_val_stats   = _gap_stats(model, val_ds,   collate, "val_pre", ref_model=None, use_null_ref=True)
 
 
         with open(analysis_dir / "train_pre.jsonl", "w") as f:
@@ -967,8 +981,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         # ────────────────────────────────────────────────────────────────────
         # 3) POST-TRAIN statistics  (same API as above)
         # ────────────────────────────────────────────────────────────────────
-        post_train_rows, post_train_stats = _gap_stats(model, train_ds, collate, "train_post")
-        post_val_rows , post_val_stats   = _gap_stats(model, val_ds,   collate, "val_post")
+        post_train_rows, post_train_stats = _gap_stats(model, train_ds, collate, "train_post", ref_model=None, use_null_ref=False)
+        post_val_rows , post_val_stats   = _gap_stats(model, val_ds,   collate, "val_post", ref_model=None, use_null_ref=False)
 
 
         with open(analysis_dir / "train_post.jsonl", "w") as f:
