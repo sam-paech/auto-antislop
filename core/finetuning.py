@@ -834,7 +834,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
 
 
-    CALC_VAL_STATS = True
+    CALC_VAL_STATS = False
     if CALC_VAL_STATS:
         def _collate_tdpo(features, pad_id: int, max_len: int):
             # tensors → left-pad → static length
@@ -933,10 +933,10 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         print("sample val rows  :", pre_val_rows [:10])
 
 
-    import gc
-    gc.collect()
-    torch.cuda.empty_cache()
-    torch.cuda.reset_peak_memory_stats()
+    #import gc
+    #gc.collect()
+    #torch.cuda.empty_cache()
+    #torch.cuda.reset_peak_memory_stats()
 
 
 
