@@ -756,6 +756,25 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     CALC_VAL_STATS = True
     if CALC_VAL_STATS:
+        def _collate_tdpo(features, pad_id: int, max_len: int):
+            # tensors → left-pad → static length
+            prompt_tensors = [torch.tensor(f["prompt_ids"]) for f in features]
+            prompt_ids = pad_sequence(prompt_tensors,
+                                    batch_first=True,
+                                    padding_value=pad_id)
+            if prompt_ids.size(1) < max_len:
+                pad_cols = max_len - prompt_ids.size(1)
+                prompt_ids = F.pad(prompt_ids, (pad_cols, 0), value=pad_id)
+
+            attn = prompt_ids.ne(pad_id)
+            chosen   = torch.tensor([f["chosen_token_id"]   for f in features])
+            rejected = torch.tensor([f["rejected_token_id"] for f in features])
+
+            return dict(prompt_ids=prompt_ids,
+                        attention_mask=attn,
+                        chosen_token_id=chosen,
+                        rejected_token_id=rejected)
+
         from torch.utils.data import DataLoader
         def _gap_stats(model, dataset, collate_fn, tag, batch_size=32):
             model.eval()
@@ -809,10 +828,12 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         analysis_dir = experiment_run_dir / "logprob_gap_analysis"
         analysis_dir.mkdir(exist_ok=True)
 
-        pre_train_rows, pre_train_stats = _gap_stats(
-            model, train_ds, LastTokenDPOTrainer.tdpo_collator, "train_pre")
-        pre_val_rows , pre_val_stats  = _gap_stats(
-            model, val_ds  , LastTokenDPOTrainer.tdpo_collator, "val_pre")
+        pad_id = tokenizer.pad_token_id
+        collate = lambda feats: _collate_tdpo(feats, pad_id, max_seq_length)
+
+        pre_train_rows, pre_train_stats = _gap_stats(model, train_ds, collate, "train_pre")
+        pre_val_rows , pre_val_stats   = _gap_stats(model, val_ds,   collate, "val_pre")
+
 
         with open(analysis_dir / "train_pre.jsonl", "w") as f:
             for r in pre_train_rows: f.write(json.dumps(r) + "\n")
@@ -945,10 +966,9 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         # ────────────────────────────────────────────────────────────────────
         # 3) POST-TRAIN statistics  (same API as above)
         # ────────────────────────────────────────────────────────────────────
-        post_train_rows, post_train_stats = _gap_stats(
-            model, train_ds, dpo_trainer.data_collator, "train_post")
-        post_val_rows , post_val_stats  = _gap_stats(
-            model, val_ds  , dpo_trainer.data_collator, "val_post")
+        post_train_rows, post_train_stats = _gap_stats(model, train_ds, collate, "train_post")
+        post_val_rows , post_val_stats   = _gap_stats(model, val_ds,   collate, "val_post")
+
 
         with open(analysis_dir / "train_post.jsonl", "w") as f:
             for r in post_train_rows: f.write(json.dumps(r) + "\n")
