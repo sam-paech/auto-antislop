@@ -907,7 +907,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     merged.save_pretrained(
         merged_dir,
         safe_serialization=True,                # *.safetensors shards
-        max_shard_size="2GB",
+        max_shard_size="4GB",
     )
     tokenizer.save_pretrained(merged_dir)
     logger.info(f"Merged 16-bit model saved -> {merged_dir}")
