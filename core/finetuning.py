@@ -822,10 +822,6 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     # ── Quick sanity-check inference BEFORE merging ───────────────────────
     try:
-        trainer_stats = dpo_trainer.train()
-        logger.info("DPO training finished.")
-        if hasattr(trainer_stats, 'metrics'):
-            logger.info(f"Trainer metrics: {trainer_stats.metrics}")
         test_prompt = (
             config.get("finetune_quick_test_prompt")                    # optional YAML/CLI override
             or "You are a creative storyteller.\n\n"
