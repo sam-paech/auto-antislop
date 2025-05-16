@@ -547,8 +547,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             )
             logits_last = tok_out.logits[torch.arange(ids.size(0), device=model.device), last_idx]
 
-            del past_kv, ctx_out, tok_out
-            torch.cuda.empty_cache()
+            #del past_kv, ctx_out, tok_out
+            #torch.cuda.empty_cache()
 
             # ── log-probs ----------------------------------------------------------
             logp_good = F.log_softmax(logits_last, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
@@ -558,28 +558,29 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             with torch.no_grad():
                 if self.ref_model is None:
                     # OLD VERSION: Wrong because didn't recompute whole context with lora detached:                    
-                    #with self.null_ref_context():
-                    #    ref_tok_out = model(
-                    #        tok_ids,
-                    #        attention_mask=tok_attn,
-                    #        past_key_values=past_kv,
-                    #        use_cache=False,
-                    #        return_dict=True,
-                    #    )
-                    with self.null_ref_context():          # LoRA disabled
-                        ref_ctx_out = model(
-                            ctx_ids,
-                            attention_mask=ctx_attn,
-                            use_cache=True,
-                            return_dict=True,
-                        )
+                    with self.null_ref_context():
                         ref_tok_out = model(
                             tok_ids,
                             attention_mask=tok_attn,
-                            past_key_values=ref_ctx_out.past_key_values,
+                            past_key_values=past_kv,
                             use_cache=False,
                             return_dict=True,
                         )
+                    if False:
+                        with self.null_ref_context():          # LoRA disabled
+                            ref_ctx_out = model(
+                                ctx_ids,
+                                attention_mask=ctx_attn,
+                                use_cache=True,
+                                return_dict=True,
+                            )
+                            ref_tok_out = model(
+                                tok_ids,
+                                attention_mask=tok_attn,
+                                past_key_values=ref_ctx_out.past_key_values,
+                                use_cache=False,
+                                return_dict=True,
+                            )
                 else:
                     ref_tok_out = self.ref_model(
                         tok_ids,
