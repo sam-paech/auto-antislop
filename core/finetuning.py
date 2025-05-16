@@ -1,109 +1,102 @@
 import logging
 logger = logging.getLogger(__name__)
 
-# --- Attempt to import Unsloth and related libraries only when this function is called ---
-#if not UNSLOTH_LIBS_LOADED:
-try:
-    from unsloth import FastLanguageModel
-    from transformers import AutoTokenizer, TextStreamer # Added TextStreamer for potential inference example
-    from trl import DPOTrainer, DPOConfig
-    from datasets import load_dataset
-    from unsloth.chat_templates import get_chat_template
-    
-    # Make these available in the function's local scope for convenience
-    # Or, you can just use them directly as `unsloth.FastLanguageModel` etc.
-    # For cleaner code within the function, assigning to local variables is fine.
-    globals()['FastLanguageModel'] = FastLanguageModel
-    globals()['AutoTokenizer'] = AutoTokenizer
-    globals()['TextStreamer'] = TextStreamer
-    globals()['DPOTrainer'] = DPOTrainer
-    globals()['DPOConfig'] = DPOConfig
-    globals()['load_dataset'] = load_dataset
-    globals()['get_chat_template'] = get_chat_template
-    
-    UNSLOTH_LIBS_LOADED = True
-    logger.info("Unsloth and DPO finetuning libraries loaded successfully.")
-except ImportError as e:
-    logger.error(f"Failed to import Unsloth or its dependencies: {e}. DPO finetuning cannot proceed.")
-    logger.error("Please ensure Unsloth, TRL, PEFT, Accelerate, BitsandBytes, Transformers, and Datasets are installed.")
-    #return # Exit if essential libraries can't be loaded
-
-#if not UNSLOTH_LIBS_LOADED: # Double check, in case of other import issues
-#    logger.error("Unsloth libraries are not available. Aborting DPO finetuning.")
-#    return
+def load_imports():
+    # --- Attempt to import Unsloth and related libraries only when this function is called ---
+    try:
+        from unsloth import FastLanguageModel
+        from transformers import AutoTokenizer, TextStreamer # Added TextStreamer for potential inference example
+        from transformers import AutoModelForCausalLM
+        from peft import PeftModel
+        from trl import DPOTrainer, DPOConfig
+        from datasets import load_dataset
+        from unsloth.chat_templates import get_chat_template
+        
+        # Make these available in the function's local scope for convenience
+        # Or, you can just use them directly as `unsloth.FastLanguageModel` etc.
+        # For cleaner code within the function, assigning to local variables is fine.
+        globals()['FastLanguageModel'] = FastLanguageModel
+        globals()['AutoTokenizer'] = AutoTokenizer
+        globals()['TextStreamer'] = TextStreamer
+        globals()['DPOTrainer'] = DPOTrainer
+        globals()['DPOConfig'] = DPOConfig
+        globals()['load_dataset'] = load_dataset
+        globals()['get_chat_template'] = get_chat_template
+        
+        logger.info("Unsloth and DPO finetuning libraries loaded successfully.")
+    except ImportError as e:
+        logger.error(f"Failed to import Unsloth or its dependencies: {e}. DPO finetuning cannot proceed.")
+        logger.error("Please ensure Unsloth, TRL, PEFT, Accelerate, BitsandBytes, Transformers, and Datasets are installed.")
+        #return # Exit if essential libraries can't be loaded
 
 
-import os
-import torch # Keep torch as it might be used for GPU checks earlier if needed
-from pathlib import Path
-# typing.Optional can be imported at the top level if used in type hints outside the function
-from typing import Optional, List, Dict, Any
-from torch.utils.data import default_collate
-import torch.nn.functional as F
-from torch.nn.utils.rnn import pad_sequence
+    import os
+    import torch # Keep torch as it might be used for GPU checks earlier if needed
+    from pathlib import Path
+    # typing.Optional can be imported at the top level if used in type hints outside the function
+    from typing import Optional, List, Dict, Any
+    from torch.utils.data import default_collate
+    import torch.nn.functional as F
+    from torch.nn.utils.rnn import pad_sequence
 
 
-# ── QUIET-MODE FOR DATASETS / TRANSFORMERS ────────────────────────────
-import datasets, transformers, warnings, contextlib, io, os
-# kill progress bars & debug prints
-os.environ["HF_DATASETS_DISABLE_PROGRESS_BARS"] = "1"
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-datasets.utils.logging.set_verbosity_error()
-transformers.utils.logging.set_verbosity_error()
-logging.getLogger("datasets").setLevel(logging.ERROR)
-logging.getLogger("transformers").setLevel(logging.ERROR)
-# route any stray `print` that slips through to /dev/null during finetune
-null_fh = open(os.devnull, "w")
-suppress_stdout = contextlib.redirect_stdout(null_fh)
-suppress_stderr = contextlib.redirect_stderr(null_fh)
-# ───────────────────────────────────────────────────────────────────────
+    # ── QUIET-MODE FOR DATASETS / TRANSFORMERS ────────────────────────────
+    import datasets, transformers, warnings, contextlib, io, os
+    # kill progress bars & debug prints
+    os.environ["HF_DATASETS_DISABLE_PROGRESS_BARS"] = "1"
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    datasets.utils.logging.set_verbosity_error()
+    transformers.utils.logging.set_verbosity_error()
+    logging.getLogger("datasets").setLevel(logging.ERROR)
+    logging.getLogger("transformers").setLevel(logging.ERROR)
+    # route any stray `print` that slips through to /dev/null during finetune
+    null_fh = open(os.devnull, "w")
+    suppress_stdout = contextlib.redirect_stdout(null_fh)
+    suppress_stderr = contextlib.redirect_stderr(null_fh)
+    # ───────────────────────────────────────────────────────────────────────
 
-# ─────────────────────────────────────────────────────────────
-#  1. Quiet 🤗 Datasets (the D2 / T4 object-dumps)
-# ─────────────────────────────────────────────────────────────
-try:
-    # Must be done **before** the first `datasets` import
-    import datasets.utils.logging as hf_datasets_logging
-    hf_datasets_logging.set_verbosity_error()  # or WARNING if you still want HF progress bars
-except ModuleNotFoundError:
-    pass  # datasets not installed yet – fine
+    # ─────────────────────────────────────────────────────────────
+    #  1. Quiet 🤗 Datasets (the D2 / T4 object-dumps)
+    # ─────────────────────────────────────────────────────────────
+    try:
+        # Must be done **before** the first `datasets` import
+        import datasets.utils.logging as hf_datasets_logging
+        hf_datasets_logging.set_verbosity_error()  # or WARNING if you still want HF progress bars
+    except ModuleNotFoundError:
+        pass  # datasets not installed yet – fine
 
-# Belt-and-braces: silence its individual loggers too
-for name in (
-    "datasets",               # umbrella
-    "datasets.arrow_dataset", # the shard concatenation prints
-):
-    l = logging.getLogger(name)
-    l.setLevel(logging.ERROR)
-    l.propagate = False
+    # Belt-and-braces: silence its individual loggers too
+    for name in (
+        "datasets",               # umbrella
+        "datasets.arrow_dataset", # the shard concatenation prints
+    ):
+        l = logging.getLogger(name)
+        l.setLevel(logging.ERROR)
+        l.propagate = False
 
-# ─────────────────────────────────────────────────────────────
-#  2. Silence *all* remaining torch.compile / dynamo spam
-# ─────────────────────────────────────────────────────────────
-_noisy_torch_loggers = [
-    # earlier ones
-    "torch._functorch",
-    "torch._functorch._aot_autograd",
-    "torch._functorch._aot_autograd.jit_compile_runtime_wrappers",
-    "torch._inductor",
-    "torch._dynamo",
+    # ─────────────────────────────────────────────────────────────
+    #  2. Silence *all* remaining torch.compile / dynamo spam
+    # ─────────────────────────────────────────────────────────────
+    _noisy_torch_loggers = [
+        # earlier ones
+        "torch._functorch",
+        "torch._functorch._aot_autograd",
+        "torch._functorch._aot_autograd.jit_compile_runtime_wrappers",
+        "torch._inductor",
+        "torch._dynamo",
 
-    # new offenders
-    "torch._functorch._aot_autograd.dispatch_and_compile_graph",
-    "torch.fx",
-    "torch.fx.experimental",
-    "torch.fx.experimental.symbolic_shapes",
-    "torch._utils_internal",
-]
+        # new offenders
+        "torch._functorch._aot_autograd.dispatch_and_compile_graph",
+        "torch.fx",
+        "torch.fx.experimental",
+        "torch.fx.experimental.symbolic_shapes",
+        "torch._utils_internal",
+    ]
 
-for name in _noisy_torch_loggers:
-    lg = logging.getLogger(name)
-    lg.setLevel(logging.ERROR)
-    lg.propagate = False  # critical – stops bubbling up to the root logger
-
-# Global flag to check if imports were successful, set within the function
-UNSLOTH_LIBS_LOADED = False
-
+    for name in _noisy_torch_loggers:
+        lg = logging.getLogger(name)
+        lg.setLevel(logging.ERROR)
+        lg.propagate = False  # critical – stops bubbling up to the root logger
 
 class LastTokenDPOTrainer(DPOTrainer):
     """
@@ -556,9 +549,7 @@ def freeze_early_layers(model, n_unfrozen: int = 4, verbose: bool = True):
 
 
 def run_dpo_finetune(config: dict, experiment_run_dir: Path):
-    #global UNSLOTH_LIBS_LOADED # To modify the global flag
-
-    
+    load_imports()
 
     logger.info("Starting finetuning process...")
 
@@ -850,28 +841,46 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         logger.warning("Quick inference test failed: %s", e)
 
     
-    out_root   = finetune_output_dir        # whatever you chose earlier
-    lora_dir   = Path(out_root) / "lora_adapters_manual"
-    merged_dir = Path(out_root) / "merged_16bit_manual"
+    
+    lora_dir   = finetune_output_dir / "lora_adapters"
+    merged_dir = finetune_output_dir / "merged_16bit"
 
-    # 1)  dump just the LoRA adapter  (≈ 300 kB – 20 MB)
-    os.makedirs(lora_dir, exist_ok=True)
-    model.save_pretrained(lora_dir)         # model is still a PeftModel
+    # 1. always save the adapter (tiny, 4-bit or not)
+    model.save_pretrained(lora_dir)
     tokenizer.save_pretrained(lora_dir)
+    logger.info(f"LoRA adapters saved -> {lora_dir}")
 
-    # 2)  produce a “normal” HF model *with* the LoRA deltas baked in
-    with torch.no_grad():                   # avoids stray grads in state-dict
-        merged = model.merge_and_unload()   # returns a vanilla AutoModel
+    # 2. build a 16-bit merged checkpoint
+    if config["finetune_load_in_4bit"]:                      # TRAINED IN 4-BIT
+        logger.info("Reloading base model on CPU for fp16 merge …")
 
-    # (optional) push to CPU to cut GPU RAM before save
-    merged = merged.to(torch.float16).cpu()
+        # move current 4-bit graph away to free VRAM
+        model.cpu(); torch.cuda.empty_cache(); gc.collect()
 
+        base_fp16 = AutoModelForCausalLM.from_pretrained(
+            config["finetune_base_model_id"],
+            torch_dtype=torch.float16,          # or bfloat16
+            device_map={"": "cpu"},             # load straight to CPU
+        )
+        model_fp16 = PeftModel.from_pretrained(
+            base_fp16,
+            lora_dir,                           # plug in the saved adapter
+            device_map={"": "cpu"},
+        )
+        merged = model_fp16.merge_and_unload()  # pure fp16 torch.nn.Linear
+    else:                                                   # TRAINED IN 16-BIT
+        logger.info("Training was fp16/bf16 – merging in-place …")
+        merged = model.merge_and_unload()       # still on GPU
+        merged = merged.to(torch.float16).cpu() # push to CPU for writing
+
+    # 3. write the merged checkpoint
     merged.save_pretrained(
         merged_dir,
-        safe_serialization=True,            # → *.safetensors
-        max_shard_size="4GB",               # or whatever suits your disk
+        safe_serialization=True,                # *.safetensors shards
+        max_shard_size="2GB",
     )
     tokenizer.save_pretrained(merged_dir)
+    logger.info(f"Merged 16-bit model saved -> {merged_dir}")
 
     # --- Saving Model ---
     # (Saving logic remains the same)
