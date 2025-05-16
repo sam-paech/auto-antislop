@@ -887,8 +887,10 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                     wins      += (delta > 0).sum().item()
 
                     #rows.extend([{"delta": round(float(d), 6), "chosen_id": g.item(), "rejected_id": b.item()}
-                    rows.extend([{"delta": round(d, 6), "chosen_id": g.item(), "rejected_id": b.item()}
-                                for d, g, b in zip(delta, good, bad)])
+                    rows.extend([{"delta": round(d.item(), 6),  # or round(d.item(), 6)
+                        "chosen_id": g.item(),
+                        "rejected_id": b.item()}
+                        for d, g, b in zip(delta, good, bad)])
 
             mean = tot_delta / len(dataset)
             acc  = wins / len(dataset)
