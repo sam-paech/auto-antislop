@@ -873,7 +873,9 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
                     # --- policy forward ------------------------------------------------
                     #with torch.no_grad(), torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    logits = model(ids, attention_mask=attn).logits
+                    #logits = model(ids, attention_mask=attn).logits
+                    with torch.no_grad(), torch.cuda.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+                        logits = model(ids, attention_mask=attn).logits
                     logits_last = logits[torch.arange(ids.size(0)), last]
                     lp_good = torch.log_softmax(logits_last, -1).gather(-1, good.unsqueeze(-1)).squeeze(-1)
                     lp_bad  = torch.log_softmax(logits_last, -1).gather(-1, bad .unsqueeze(-1)).squeeze(-1)
