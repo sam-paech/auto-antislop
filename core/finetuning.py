@@ -192,16 +192,17 @@ def load_tdpo_dataset(
         ch_ids = tokenizer(ex["chosen_decoded"],   add_special_tokens=False).input_ids
         rj_ids = tokenizer(ex["rejected_decoded"], add_special_tokens=False).input_ids
 
-        # ── Reject rows where the suffix is not exactly ONE token ───────────
-        if len(ch_ids) != 1 or len(rj_ids) != 1:
-            _tok.multi_tok_rows += 1
-            print('! failed tokenisation', len(ch_ids), len(rj_ids), ex["chosen_decoded"], ex["rejected_decoded"])
-            return {
-                "prompt_ids":        [],     # placeholder
-                "chosen_token_id":    0,
-                "rejected_token_id":  0,
-                "__valid":           False,
-            }  # schema will be padded later
+        if False:
+            # ── Reject rows where the suffix is not exactly ONE token ───────────
+            if len(ch_ids) != 1 or len(rj_ids) != 1:
+                _tok.multi_tok_rows += 1
+                print('! failed tokenisation', len(ch_ids), len(rj_ids), ex["chosen_decoded"], ex["rejected_decoded"])
+                return {
+                    "prompt_ids":        [],     # placeholder
+                    "chosen_token_id":    0,
+                    "rejected_token_id":  0,
+                    "__valid":           False,
+                }  # schema will be padded later
 
         ok = (
             len(prompt_ids) + 1 <= max_seq_len
@@ -871,7 +872,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                     last  = attn.sum(1) - 1
 
                     # --- policy forward ------------------------------------------------
-                    logits = model(ids, attention_mask=attn).logits
+                    with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                        logits = model(ids, attention_mask=attn).logits
                     logits_last = logits[torch.arange(ids.size(0)), last]
                     lp_good = torch.log_softmax(logits_last, -1).gather(-1, good.unsqueeze(-1)).squeeze(-1)
                     lp_bad  = torch.log_softmax(logits_last, -1).gather(-1, bad .unsqueeze(-1)).squeeze(-1)
