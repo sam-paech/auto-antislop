@@ -849,27 +849,52 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     except Exception as e:
         logger.warning("Quick inference test failed: %s", e)
 
+    
+    out_root   = finetune_output_dir        # whatever you chose earlier
+    lora_dir   = Path(out_root) / "lora_adapters_manual"
+    merged_dir = Path(out_root) / "merged_16bit_manual"
+
+    # 1)  dump just the LoRA adapter  (≈ 300 kB – 20 MB)
+    os.makedirs(lora_dir, exist_ok=True)
+    model.save_pretrained(lora_dir)         # model is still a PeftModel
+    tokenizer.save_pretrained(lora_dir)
+
+    # 2)  produce a “normal” HF model *with* the LoRA deltas baked in
+    with torch.no_grad():                   # avoids stray grads in state-dict
+        merged = model.merge_and_unload()   # returns a vanilla AutoModel
+
+    # (optional) push to CPU to cut GPU RAM before save
+    merged = merged.to(torch.float16).cpu()
+
+    merged.save_pretrained(
+        merged_dir,
+        safe_serialization=True,            # → *.safetensors
+        max_shard_size="4GB",               # or whatever suits your disk
+    )
+    tokenizer.save_pretrained(merged_dir)
+
     # --- Saving Model ---
     # (Saving logic remains the same)
-    try:
-        lora_save_path = finetune_output_dir / "lora_adapters"
-        dpo_trainer.save_model(str(lora_save_path)) 
-        tokenizer.save_pretrained(str(lora_save_path))
-        logger.info(f"LoRA adapters and tokenizer saved to {lora_save_path}")
+    if False:
+        try:
+            lora_save_path = finetune_output_dir / "lora_adapters"
+            dpo_trainer.save_model(str(lora_save_path)) 
+            tokenizer.save_pretrained(str(lora_save_path))
+            logger.info(f"LoRA adapters and tokenizer saved to {lora_save_path}")
 
-        if config.get('finetune_save_merged_16bit'):
-            merged_path = finetune_output_dir / "merged_16bit"
-            logger.info(f"Saving merged 16-bit model to {merged_path}...")
-            model.save_pretrained_merged(str(merged_path), tokenizer, save_method="merged_16bit", safe_serialization=True)
-            logger.info(f"Merged 16-bit model saved to {merged_path}")
+            if config.get('finetune_save_merged_16bit'):
+                merged_path = finetune_output_dir / "merged_16bit"
+                logger.info(f"Saving merged 16-bit model to {merged_path}...")
+                model.save_pretrained_merged(str(merged_path), tokenizer, save_method="merged_16bit", safe_serialization=True)
+                logger.info(f"Merged 16-bit model saved to {merged_path}")
 
-        if config.get('finetune_save_gguf_q8_0'):
-            gguf_path = finetune_output_dir / "gguf_q8_0" 
-            logger.info(f"Saving GGUF Q8_0 model to {gguf_path}.gguf ...")
-            model.save_pretrained_gguf(str(gguf_path), tokenizer, quantization_method="q8_0")
-            logger.info(f"GGUF Q8_0 model saved to {gguf_path}.gguf")
+            if config.get('finetune_save_gguf_q8_0'):
+                gguf_path = finetune_output_dir / "gguf_q8_0" 
+                logger.info(f"Saving GGUF Q8_0 model to {gguf_path}.gguf ...")
+                model.save_pretrained_gguf(str(gguf_path), tokenizer, quantization_method="q8_0")
+                logger.info(f"GGUF Q8_0 model saved to {gguf_path}.gguf")
 
-    except Exception as e:
-        logger.error(f"Error saving model: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error saving model: {e}", exc_info=True)
 
     logger.info("Finetuning process completed.")
