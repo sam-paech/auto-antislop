@@ -755,6 +755,66 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
 
 
+    
+
+
+    
+    # Hard-disable gradient-checkpointing for TDPO
+    if mode == "tdpo":
+        model.config._attn_implementation = "flash_attention_2"
+        # turn off every ckpt flag Unsloth uses
+        if hasattr(model, "gradient_checkpointing_disable"):
+            model.gradient_checkpointing_disable()
+            print('gradient checkpointing disabled!')
+        if hasattr(model, "gradient_checkpointing_enable"):
+            model.gradient_checkpointing_disable()
+            print("✓ Disabled gradient checkpointing for better compilation")
+        for mod in model.modules():
+            if hasattr(mod, "gradient_checkpointing"):
+                print('module disabled gradient checkpointing!')
+                mod.gradient_checkpointing = False
+        if hasattr(model.config, "gradient_checkpointing"):
+            print('attempting to disable gradient checkpionting in config')
+            model.config.gradient_checkpointing = False
+        #model = model.to(model.device)
+        if False:
+            # 1. HF flag
+            if getattr(model, "gradient_checkpointing", False):
+                model.gradient_checkpointing_disable()           # HF helper
+            # 2. Unsloth compiled blocks keep their own flag
+            if hasattr(model, "model") and hasattr(model.model, "gradient_checkpointing"):
+                model.model.gradient_checkpointing = False
+            if hasattr(model.config, "gradient_checkpointing"):
+                model.config.gradient_checkpointing = False
+
+    model = FastLanguageModel.get_peft_model(
+        model,
+        r=config['finetune_lora_r'],
+        lora_alpha=config['finetune_lora_alpha'],
+        #lora_dropout=config['finetune_lora_dropout'],
+        bias="none",
+        target_modules=config['finetune_target_modules'],
+        use_gradient_checkpointing=config['finetune_gradient_checkpointing'],
+        random_state=3407,
+        max_seq_length=max_seq_length,
+    )
+
+    if mode == "tdpo":
+        model.config._attn_implementation = "flash_attention_2"
+        # turn off every ckpt flag Unsloth uses
+        if hasattr(model, "gradient_checkpointing_disable"):
+            model.gradient_checkpointing_disable()
+        for mod in model.modules():
+            if hasattr(mod, "gradient_checkpointing"):
+                mod.gradient_checkpointing = False
+        if hasattr(model.config, "gradient_checkpointing"):
+            model.config.gradient_checkpointing = False
+
+
+
+
+
+
     CALC_VAL_STATS = True
     if CALC_VAL_STATS:
         def _collate_tdpo(features, pad_id: int, max_len: int):
@@ -818,7 +878,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                     tot_delta += delta.sum().item()
                     wins      += (delta > 0).sum().item()
 
-                    rows.extend([{"delta": round(d, 6), "chosen_id": g.item(), "rejected_id": b.item()}
+                    rows.extend([{"delta": round(float(d), 6), "chosen_id": g.item(), "rejected_id": b.item()}
                                 for d, g, b in zip(delta, good, bad)])
 
             mean = tot_delta / len(dataset)
@@ -863,57 +923,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
 
 
-    
-    # Hard-disable gradient-checkpointing for TDPO
-    if mode == "tdpo":
-        model.config._attn_implementation = "flash_attention_2"
-        # turn off every ckpt flag Unsloth uses
-        if hasattr(model, "gradient_checkpointing_disable"):
-            model.gradient_checkpointing_disable()
-            print('gradient checkpointing disabled!')
-        if hasattr(model, "gradient_checkpointing_enable"):
-            model.gradient_checkpointing_disable()
-            print("✓ Disabled gradient checkpointing for better compilation")
-        for mod in model.modules():
-            if hasattr(mod, "gradient_checkpointing"):
-                print('module disabled gradient checkpointing!')
-                mod.gradient_checkpointing = False
-        if hasattr(model.config, "gradient_checkpointing"):
-            print('attempting to disable gradient checkpionting in config')
-            model.config.gradient_checkpointing = False
-        #model = model.to(model.device)
-        if False:
-            # 1. HF flag
-            if getattr(model, "gradient_checkpointing", False):
-                model.gradient_checkpointing_disable()           # HF helper
-            # 2. Unsloth compiled blocks keep their own flag
-            if hasattr(model, "model") and hasattr(model.model, "gradient_checkpointing"):
-                model.model.gradient_checkpointing = False
-            if hasattr(model.config, "gradient_checkpointing"):
-                model.config.gradient_checkpointing = False
 
-    model = FastLanguageModel.get_peft_model(
-        model,
-        r=config['finetune_lora_r'],
-        lora_alpha=config['finetune_lora_alpha'],
-        #lora_dropout=config['finetune_lora_dropout'],
-        bias="none",
-        target_modules=config['finetune_target_modules'],
-        use_gradient_checkpointing=config['finetune_gradient_checkpointing'],
-        random_state=3407,
-        max_seq_length=max_seq_length,
-    )
-
-    if mode == "tdpo":
-        model.config._attn_implementation = "flash_attention_2"
-        # turn off every ckpt flag Unsloth uses
-        if hasattr(model, "gradient_checkpointing_disable"):
-            model.gradient_checkpointing_disable()
-        for mod in model.modules():
-            if hasattr(mod, "gradient_checkpointing"):
-                mod.gradient_checkpointing = False
-        if hasattr(model.config, "gradient_checkpointing"):
-            model.config.gradient_checkpointing = False
 
 
     #freeze_early_layers(model, n_unfrozen = 4, verbose = True)
