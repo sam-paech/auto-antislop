@@ -10,8 +10,7 @@ if TYPE_CHECKING:
     from datasets import Dataset as DatasetType
     from unsloth.chat_templates import get_chat_template as get_chat_template_type
     import os
-    import torch # Keep torch as it might be used for GPU checks earlier if needed
-    from pathlib import Path
+    import torch # Keep torch as it might be used for GPU checks earlier if needed    
     # typing.Optional can be imported at the top level if used in type hints outside the function
     from typing import Optional, List, Dict, Any
     from torch.utils.data import default_collate
@@ -20,6 +19,7 @@ if TYPE_CHECKING:
     
 
 import logging
+from pathlib import Path
 logger = logging.getLogger(__name__)
 
 def load_imports():
@@ -52,8 +52,7 @@ def load_imports():
 
 
     import os
-    import torch # Keep torch as it might be used for GPU checks earlier if needed
-    from pathlib import Path
+    import torch # Keep torch as it might be used for GPU checks earlier if needed    
     # typing.Optional can be imported at the top level if used in type hints outside the function
     from typing import Optional, List, Dict, Any
     from torch.utils.data import default_collate
