@@ -574,7 +574,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
             # ── preference loss (only last-token path) ----------------------------
             delta     = (logp_good - ref_good) - (logp_bad - ref_bad)
-            pref_loss = -F.logsigmoid(self.beta * delta).mean()
+            #pref_loss = -F.logsigmoid(self.beta * delta).mean()
+            pref_loss = -F.logsigmoid(3.0 * delta).mean()
 
             # ── (optional) disable prompt-level KL completely ---------------------
             kl_loss   = torch.tensor(0.0, device=model.device)
