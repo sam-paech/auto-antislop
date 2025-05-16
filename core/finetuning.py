@@ -800,8 +800,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
                     # --- reference forward --------------------------------------------
                     if ref_model is None and use_null_ref:
-                        with model.null_ref_context():
-                            ref_logits = model(ids, attention_mask=attn).logits
+                        #with model.null_ref_context():
+                        ref_logits = model(ids, attention_mask=attn).logits
                     elif ref_model is not None:
                         ref_logits = ref_model(ids, attention_mask=attn).logits
                     else:                       # no reference term → use raw gap
