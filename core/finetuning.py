@@ -573,7 +573,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 ref_good = F.log_softmax(ref_logits_last, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
                 ref_bad  = F.log_softmax(ref_logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
 
-            if False:
+            if True: # normal path
                 # ── preference loss (only last-token path) ----------------------------
                 delta     = (logp_good - ref_good) - (logp_bad - ref_bad)
                 #pref_loss = -F.logsigmoid(self.beta * delta).mean()
@@ -582,10 +582,11 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 # ── (optional) disable prompt-level KL completely ---------------------
                 kl_loss   = torch.tensor(0.0, device=model.device)
             
-            # delta = (logp_good - ref_good) - (logp_bad - ref_bad)
-            delta = logp_good - logp_bad            # <- raw gap, no tether
-            pref_loss = -F.logsigmoid(self.beta * delta).mean()
-            kl_loss   = 0.0
+            else: # testing path with reference term disabled
+                # delta = (logp_good - ref_good) - (logp_bad - ref_bad)
+                delta = logp_good - logp_bad            # <- raw gap, no tether
+                pref_loss = -F.logsigmoid(self.beta * delta).mean()
+                kl_loss   = 0.0
 
 
             loss = pref_loss + kl_loss                       # kl_loss is zero, but left for clarity
