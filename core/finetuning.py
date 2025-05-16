@@ -547,6 +547,9 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             )
             logits_last = tok_out.logits[torch.arange(ids.size(0), device=model.device), last_idx]
 
+            del past_kv, ctx_out, tok_out
+            torch.cuda.empty_cache()
+
             # ── log-probs ----------------------------------------------------------
             logp_good = F.log_softmax(logits_last, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
             logp_bad  = F.log_softmax(logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
