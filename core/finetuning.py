@@ -738,9 +738,25 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         return
 
 
+    
+    try:
+        model, _ = FastLanguageModel.from_pretrained(
+            model_name=model_name,
+            max_seq_length=max_seq_length,
+            load_in_4bit=config['finetune_load_in_4bit'],
+            dtype=torch.bfloat16 if config['finetune_load_in_4bit'] and torch.cuda.is_bf16_supported() else None,
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to load base model '{model_name}' or tokenizer for DPO: {e}", exc_info=True)
+        return
+    
+
+
 
     CALC_VAL_STATS = True
     if CALC_VAL_STATS:
+        from torch.utils.data import DataLoader
         def _gap_stats(model, dataset, collate_fn, tag, batch_size=32):
             model.eval()
             loader = DataLoader(dataset,
@@ -809,19 +825,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         print("sample train rows:", pre_train_rows[:10])
         print("sample val rows  :", pre_val_rows [:10])
 
-    
-    
-    try:
-        model, _ = FastLanguageModel.from_pretrained(
-            model_name=model_name,
-            max_seq_length=max_seq_length,
-            load_in_4bit=config['finetune_load_in_4bit'],
-            dtype=torch.bfloat16 if config['finetune_load_in_4bit'] and torch.cuda.is_bf16_supported() else None,
-        )
-        
-    except Exception as e:
-        logger.error(f"Failed to load base model '{model_name}' or tokenizer for DPO: {e}", exc_info=True)
-        return
+
+
     
     # Hard-disable gradient-checkpointing for TDPO
     if mode == "tdpo":
