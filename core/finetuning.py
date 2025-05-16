@@ -148,7 +148,7 @@ def load_tdpo_dataset(
     from collections import Counter
 
     # ── raw load -----------------------------------------------------------
-    ds = load_dataset("json", data_files=str(path), split="train")
+    ds = load_dataset("json", data_files=str(path), split="train").select(range(20000))
 
     # ── optional rule-balanced re-sample ----------------------------------
     if rule_reg_strength and rule_reg_strength > 0:
