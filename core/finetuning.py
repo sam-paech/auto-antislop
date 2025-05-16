@@ -607,12 +607,12 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
             loss = pref_loss + kl_loss                       # kl_loss is zero, but left for clarity
 
-            rho         = logp_good - logp_bad
-            choice_win  = (rho > 0).float().mean().detach()
+            #rho         = logp_good - logp_bad
+            #choice_win  = (rho > 0).float().mean().detach()
             metrics = {
                 "pref_loss":  pref_loss.detach(),
-                #"chosen_win": (delta > 0).float().mean().detach(),
-                "choice_win": choice_win,              # ← new behaviour metric
+                "chosen_win": (delta > 0).float().mean().detach(),
+                #"choice_win": choice_win,              # ← new behaviour metric
             }
             self.store_metrics(metrics, train_eval="train")
 
