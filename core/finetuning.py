@@ -434,23 +434,40 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     CALC_VAL_STATS = True
     if CALC_VAL_STATS:
         def _collate_tdpo(features, pad_id: int, max_len: int):
-            # tensors → left-pad → static length
+            # ── prompt padding (unchanged) ─────────────────────────────────────
             prompt_tensors = [torch.tensor(f["prompt_ids"]) for f in features]
             prompt_ids = pad_sequence(prompt_tensors,
                                     batch_first=True,
                                     padding_value=pad_id)
             if prompt_ids.size(1) < max_len:
-                pad_cols = max_len - prompt_ids.size(1)
-                prompt_ids = F.pad(prompt_ids, (0, pad_cols), value=pad_id)
-
+                prompt_ids = F.pad(prompt_ids, (0, max_len - prompt_ids.size(1)), value=pad_id)
             attn = prompt_ids.ne(pad_id)
-            chosen   = torch.tensor([f["chosen_token_id"]   for f in features])
-            rejected = torch.tensor([f["rejected_token_id"] for f in features])
 
-            return dict(prompt_ids=prompt_ids,
-                        attention_mask=attn,
-                        chosen_token_id=chosen,
-                        rejected_token_id=rejected)
+            # ── detect variant ─────────────────────────────────────────────────
+            multi = "chosen_ids" in features[0]
+
+            if multi:
+                # variable-length list[int] → tensor [B,C] + mask
+                max_c = max(len(f["chosen_ids"]) for f in features)
+                chosen_pad  = torch.full((len(features), max_c), -100, dtype=torch.long)
+                chosen_mask = torch.zeros_like(chosen_pad, dtype=torch.bool)
+                for i, f in enumerate(features):
+                    ids = torch.tensor(f["chosen_ids"], dtype=torch.long)
+                    chosen_pad [i, : ids.size(0)] = ids
+                    chosen_mask[i, : ids.size(0)] = True
+                batch = dict(chosen_ids=chosen_pad,
+                            chosen_mask=chosen_mask)
+            else:
+                batch = dict(chosen_token_id=torch.tensor([f["chosen_token_id"] for f in features]))
+
+            # always include rejected
+            batch.update(
+                prompt_ids=prompt_ids,
+                attention_mask=attn,
+                rejected_token_id=torch.tensor([f["rejected_token_id" if "rejected_token_id" in f else "rejected_id"] for f in features]),
+            )
+            return batch
+
 
         from torch.utils.data import DataLoader
         def _gap_stats(model, dataset, collate_fn, tag,
