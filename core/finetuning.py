@@ -21,6 +21,7 @@ import logging
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 import os
+import json
 logger = logging.getLogger(__name__)
 
 def load_imports():
@@ -184,8 +185,24 @@ def load_tdpo_dataset(
             return_attention_mask=False,
         ).input_ids
 
+        #ch_ids = tokenizer(ex["chosen_decoded"],   add_special_tokens=False).input_ids
+        #rj_ids = tokenizer(ex["rejected_decoded"], add_special_tokens=False).input_ids
+
+        # tokenize the candidate suffixes *as-is* (could include the ▁ boundary)
         ch_ids = tokenizer(ex["chosen_decoded"],   add_special_tokens=False).input_ids
         rj_ids = tokenizer(ex["rejected_decoded"], add_special_tokens=False).input_ids
+
+        if False:
+            # ── Reject rows where the suffix is not exactly ONE token ───────────
+            if len(ch_ids) != 1 or len(rj_ids) != 1:
+                _tok.multi_tok_rows += 1
+                print('! failed tokenisation', len(ch_ids), len(rj_ids), ex["chosen_decoded"], ex["rejected_decoded"])
+                return {
+                    "prompt_ids":        [],     # placeholder
+                    "chosen_token_id":    0,
+                    "rejected_token_id":  0,
+                    "__valid":           False,
+                }  # schema will be padded later
 
         ok = (
             len(prompt_ids) + 1 <= max_seq_len
@@ -530,6 +547,121 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             )
             logits_last = tok_out.logits[torch.arange(ids.size(0), device=model.device), last_idx]
 
+            #del past_kv, ctx_out, tok_out
+            #torch.cuda.empty_cache()
+
+            # ── log-probs ----------------------------------------------------------
+            logp_good = F.log_softmax(logits_last, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
+            logp_bad  = F.log_softmax(logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
+
+            # ── reference model (no grad) -----------------------------------------
+            with torch.no_grad():
+                if self.ref_model is None:
+                    # OLD VERSION: Wrong because didn't recompute whole context with lora detached:                    
+                    with self.null_ref_context():
+                        ref_tok_out = model(
+                            tok_ids,
+                            attention_mask=tok_attn,
+                            past_key_values=past_kv,
+                            use_cache=False,
+                            return_dict=True,
+                        )
+                    if False:
+                        with self.null_ref_context():          # LoRA disabled
+                            ref_ctx_out = model(
+                                ctx_ids,
+                                attention_mask=ctx_attn,
+                                use_cache=True,
+                                return_dict=True,
+                            )
+                            ref_tok_out = model(
+                                tok_ids,
+                                attention_mask=tok_attn,
+                                past_key_values=ref_ctx_out.past_key_values,
+                                use_cache=False,
+                                return_dict=True,
+                            )
+                else:
+                    ref_tok_out = self.ref_model(
+                        tok_ids,
+                        attention_mask=tok_attn,
+                        past_key_values=past_kv,
+                        use_cache=False,
+                        return_dict=True,
+                    )
+                ref_logits_last = ref_tok_out.logits[torch.arange(ids.size(0), device=model.device), last_idx]
+                ref_good = F.log_softmax(ref_logits_last, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
+                ref_bad  = F.log_softmax(ref_logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
+
+            if False: # normal path
+                # ── preference loss (only last-token path) ----------------------------
+                delta     = (logp_good - ref_good) - (logp_bad - ref_bad)
+                #pref_loss = -F.logsigmoid(self.beta * delta).mean()
+                pref_loss = -F.logsigmoid(3.0 * delta).mean()
+
+                # ── (optional) disable prompt-level KL completely ---------------------
+                kl_loss   = torch.tensor(0.0, device=model.device)
+            
+            else: # testing path with reference term disabled
+                # delta = (logp_good - ref_good) - (logp_bad - ref_bad)
+                delta = logp_good - logp_bad            # <- raw gap, no tether
+                pref_loss = -F.logsigmoid(self.beta * delta).mean()
+                kl_loss   = 0.0
+
+
+            loss = pref_loss + kl_loss                       # kl_loss is zero, but left for clarity
+
+            #rho         = logp_good - logp_bad
+            #choice_win  = (rho > 0).float().mean().detach()
+            metrics = {
+                "pref_loss":  pref_loss.detach(),
+                "chosen_win": (delta > 0).float().mean().detach(),
+                #"choice_win": choice_win,              # ← new behaviour metric
+            }
+            self.store_metrics(metrics, train_eval="train")
+
+            if return_outputs:
+                return loss, metrics
+            return loss
+        # --- end new compute_loss ----------------------------------------------------
+
+        # reverting to prior version to test
+        def compute_loss(self, model, inputs, return_outputs=False, **_):
+            ids      = inputs["prompt_ids"].to(model.device)         # [B,L]
+            attn     = inputs["attention_mask"].to(model.device)     # [B,L]
+            chosen   = inputs["chosen_token_id"].to(model.device)    # [B]
+            rejected = inputs["rejected_token_id"].to(model.device)  # [B]
+
+            # ── split positions -----------------------------------------------------
+            last_idx   = attn.sum(1) - 1                             # [B]
+            ctx_ids    = ids.clone()
+            tok_ids    = torch.zeros_like(ids)                       # will hold only the last token
+            for b, idx in enumerate(last_idx):
+                ctx_ids[b, idx] = self.padding_value                 # mask last token out
+                tok_ids[b, idx] = ids[b, idx]                        # keep only last token
+            ctx_attn   = ctx_ids.ne(self.padding_value)
+            tok_attn   = tok_ids.ne(0)                               # 1 at last token
+
+            # ── 1 ▸ forward context *without* grad -------------------------------
+            with torch.no_grad():
+                ctx_out = model(
+                    ctx_ids,
+                    attention_mask=ctx_attn,
+                    use_cache=True,            # we need past_key_values
+                    return_dict=True,
+                )
+                past_kv = ctx_out.past_key_values
+
+            # ── 2 ▸ forward last token *with* grad -------------------------------
+            tok_out = model(
+                tok_ids,
+                attention_mask=tok_attn,
+                past_key_values=past_kv,
+                use_cache=False,
+                return_dict=True,
+            )
+            logits_last = tok_out.logits[torch.arange(ids.size(0), device=model.device), last_idx]
+
             # ── log-probs ----------------------------------------------------------
             logp_good = F.log_softmax(logits_last, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
             logp_bad  = F.log_softmax(logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
@@ -591,7 +723,6 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             if return_outputs:
                 return loss, metrics
             return loss
-        # --- end new compute_loss ----------------------------------------------------
 
 
         # ----------------------------------------------------------
@@ -729,8 +860,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'tdpo'.")
         return
 
-    
-    
+
     
     try:
         model, _ = FastLanguageModel.from_pretrained(
@@ -743,6 +873,13 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     except Exception as e:
         logger.error(f"Failed to load base model '{model_name}' or tokenizer for DPO: {e}", exc_info=True)
         return
+    
+
+
+
+    
+
+
     
     # Hard-disable gradient-checkpointing for TDPO
     if mode == "tdpo":
@@ -794,6 +931,116 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 mod.gradient_checkpointing = False
         if hasattr(model.config, "gradient_checkpointing"):
             model.config.gradient_checkpointing = False
+
+
+
+
+
+
+    CALC_VAL_STATS = False
+    if CALC_VAL_STATS:
+        def _collate_tdpo(features, pad_id: int, max_len: int):
+            # tensors → left-pad → static length
+            prompt_tensors = [torch.tensor(f["prompt_ids"]) for f in features]
+            prompt_ids = pad_sequence(prompt_tensors,
+                                    batch_first=True,
+                                    padding_value=pad_id)
+            if prompt_ids.size(1) < max_len:
+                pad_cols = max_len - prompt_ids.size(1)
+                prompt_ids = F.pad(prompt_ids, (pad_cols, 0), value=pad_id)
+
+            attn = prompt_ids.ne(pad_id)
+            chosen   = torch.tensor([f["chosen_token_id"]   for f in features])
+            rejected = torch.tensor([f["rejected_token_id"] for f in features])
+
+            return dict(prompt_ids=prompt_ids,
+                        attention_mask=attn,
+                        chosen_token_id=chosen,
+                        rejected_token_id=rejected)
+
+        from torch.utils.data import DataLoader
+        def _gap_stats(model, dataset, collate_fn, tag,
+               ref_model=None, use_null_ref=False, batch_size=2):
+            model.eval()
+            loader = DataLoader(dataset, batch_size=batch_size,
+                                shuffle=False, collate_fn=collate_fn)
+
+            rows, tot_delta, wins = [], 0.0, 0
+            with torch.no_grad():
+                for batch in loader:
+                    ids   = batch["prompt_ids"     ].to(model.device)
+                    attn  = batch["attention_mask" ].to(model.device)
+                    good  = batch["chosen_token_id"].to(model.device)
+                    bad   = batch["rejected_token_id"].to(model.device)
+                    last  = attn.sum(1) - 1
+
+                    # --- policy forward ------------------------------------------------
+                    #with torch.no_grad(), torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    #logits = model(ids, attention_mask=attn).logits
+                    with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                        logits = model(ids, attention_mask=attn).logits
+                    logits_last = logits[torch.arange(ids.size(0)), last]
+                    lp_good = torch.log_softmax(logits_last, -1).gather(-1, good.unsqueeze(-1)).squeeze(-1)
+                    lp_bad  = torch.log_softmax(logits_last, -1).gather(-1, bad .unsqueeze(-1)).squeeze(-1)
+
+                    
+                    delta = lp_good - lp_bad
+
+                    tot_delta += delta.sum().item()
+                    wins      += (delta > 0).sum().item()
+
+                    #rows.extend([{"delta": round(float(d), 6), "chosen_id": g.item(), "rejected_id": b.item()}
+                    rows.extend([{"delta": round(d.item(), 6),  # or round(d.item(), 6)
+                        "chosen_id": g.item(),
+                        "rejected_id": b.item()}
+                        for d, g, b in zip(delta, good, bad)])
+
+            mean = tot_delta / len(dataset)
+            acc  = wins / len(dataset)
+            return rows, {"tag": tag, "mean_delta": mean, "chosen_win": acc, "n": len(dataset)}
+
+        # ────────────────────────────────────────────────────────────────────
+        # 1) train / validation split  (after max-train cap, before model load)
+        # ────────────────────────────────────────────────────────────────────
+        VAL_N    = min(1000, int(0.1 * len(dpo_dataset_hf)))
+        train_ds = dpo_dataset_hf.select(range(len(dpo_dataset_hf) - VAL_N))
+        val_ds   = dpo_dataset_hf.select(range(len(dpo_dataset_hf) - VAL_N, len(dpo_dataset_hf)))
+
+        logger.info(f"Split → train {len(train_ds)}  | val {len(val_ds)}")
+
+        # Save a copy for the trainer
+        dpo_dataset_hf = train_ds
+        # (val_ds is only for analysis; we’re not doing eval during training.)
+        # ────────────────────────────────────────────────────────────────────
+        # 2) PRE-TRAIN statistics
+        # ────────────────────────────────────────────────────────────────────
+        analysis_dir = experiment_run_dir / "logprob_gap_analysis"
+        analysis_dir.mkdir(exist_ok=True)
+
+        pad_id = tokenizer.pad_token_id
+        collate = lambda feats: _collate_tdpo(feats, pad_id, max_seq_length)
+
+        pre_train_rows, pre_train_stats = _gap_stats(model, train_ds, collate, "train_pre", ref_model=None, use_null_ref=True)
+        pre_val_rows , pre_val_stats   = _gap_stats(model, val_ds,   collate, "val_pre", ref_model=None, use_null_ref=True)
+
+
+        with open(analysis_dir / "train_pre.jsonl", "w") as f:
+            for r in pre_train_rows: f.write(json.dumps(r) + "\n")
+        with open(analysis_dir / "val_pre.jsonl", "w") as f:
+            for r in pre_val_rows:  f.write(json.dumps(r) + "\n")
+
+        print("\n— PRE-TRAIN SUMMARY —")
+        print(pre_train_stats)
+        print(pre_val_stats)
+        print("sample train rows:", pre_train_rows[:10])
+        print("sample val rows  :", pre_val_rows [:10])
+
+
+    #import gc
+    #gc.collect()
+    #torch.cuda.empty_cache()
+    #torch.cuda.reset_peak_memory_stats()
+
 
 
     #freeze_early_layers(model, n_unfrozen = 4, verbose = True)
@@ -854,6 +1101,28 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     except Exception as e:
         logger.error(f"Error during training: {e}", exc_info=True)
         return
+    
+
+
+    if CALC_VAL_STATS:
+        # ────────────────────────────────────────────────────────────────────
+        # 3) POST-TRAIN statistics  (same API as above)
+        # ────────────────────────────────────────────────────────────────────
+        post_train_rows, post_train_stats = _gap_stats(model, train_ds, collate, "train_post", ref_model=None, use_null_ref=False)
+        post_val_rows , post_val_stats   = _gap_stats(model, val_ds,   collate, "val_post", ref_model=None, use_null_ref=False)
+
+
+        with open(analysis_dir / "train_post.jsonl", "w") as f:
+            for r in post_train_rows: f.write(json.dumps(r) + "\n")
+        with open(analysis_dir / "val_post.jsonl", "w") as f:
+            for r in post_val_rows:  f.write(json.dumps(r) + "\n")
+
+        print("\n— POST-TRAIN SUMMARY —")
+        print(post_train_stats)
+        print(post_val_stats)
+        print("sample train rows:", post_train_rows[:10])
+        print("sample val rows  :", post_val_rows [:10])
+
     
     
 
