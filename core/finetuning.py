@@ -171,7 +171,7 @@ def load_tdpo_dataset(
     stop_words = set(w.lower() for w in stop_words)
 
     # ── raw load -----------------------------------------------------------
-    ds = load_dataset("json", data_files=str(path), split="train").select(range(20000))
+    ds = load_dataset("json", data_files=str(path), split="train") #.select(range(20000))
 
     # ── optional rule-balanced re-sample ----------------------------------
     if rule_reg_strength and rule_reg_strength > 0:
