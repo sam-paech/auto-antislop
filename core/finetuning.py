@@ -765,9 +765,9 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             }
             self.store_metrics(metrics, train_eval="train")
 
-            with torch.no_grad():
-                hist = ratio.cpu().log10().numpy()
-                print("log10 ratio stats:", hist.min(), hist.mean(), hist.max())
+            #with torch.no_grad():
+            #    hist = ratio.cpu().log10().numpy()
+            #    print("log10 ratio stats:", hist.min(), hist.mean(), hist.max())
 
             if return_outputs:
                 return loss, metrics
