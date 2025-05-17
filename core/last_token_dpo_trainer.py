@@ -130,12 +130,21 @@ class LastTokenDPOTrainer(DPOTrainer):
 
         logp_all = F.log_softmax(logits_last, -1)
 
-        if inputs.get("chosen_ids") is not None:
-            # TDPO-MULTI path
-            ch_ids  = inputs["chosen_ids"].to(model.device)      # [B,C] or None
+        if inputs.get("chosen_ids") is not None:          # TDPO-MULTI
+            ch_ids  = inputs["chosen_ids"].to(model.device)      # [B,C]
             ch_mask = inputs["chosen_mask"].to(model.device)
+
+            # gather per-token log-probs, keep padding at −1e9
             gathered = logp_all.gather(-1, ch_ids).masked_fill(~ch_mask, -1e9)
-            logp_good = torch.logsumexp(gathered, dim=-1)
+
+            # ── NEW: freeze gradients for high-prob tokens ────────────────────
+            probs        = gathered.exp()                     # p = e^{log p}
+            detach_mask  = (probs > eps) & ch_mask           # ignore padding
+            gathered     = torch.where(detach_mask,
+                                    gathered.detach(),    # no grad
+                                    gathered)             # keep grad
+
+            logp_good = torch.logsumexp(gathered, dim=-1)     # [B]
         else:
             # single-token path
             chosen = inputs["chosen_token_id"].to(model.device)
