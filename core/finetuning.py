@@ -1071,7 +1071,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         collate = lambda feats: _collate_tdpo(feats, pad_id, max_seq_length)
 
 
-        if False: # skip this check for now
+        if True: # skip this check for now
             pre_train_rows, pre_train_stats = _gap_stats(model, train_ds.select(range(200)), collate, "train_pre", ref_model=None, use_null_ref=True)
             pre_val_rows , pre_val_stats   = _gap_stats(model, val_ds.select(range(200)),   collate, "val_pre", ref_model=None, use_null_ref=True)
 
