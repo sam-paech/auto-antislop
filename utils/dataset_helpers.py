@@ -160,7 +160,7 @@ def load_tdpo_multi_dataset(
     Output HF Dataset columns
         prompt_ids      : List[int]
         chosen_ids      : List[int]  (variable length ≥1)
-        rejected_id     : int
+        rejected_token_id     : int
     """
     import random, numpy as np, json
     from collections import Counter
@@ -229,18 +229,28 @@ def load_tdpo_multi_dataset(
             and len(prompt_ids) + 1 <= max_seq_len
         )
         if not valid:
-            return {"__valid": False}
+            return {
+                "prompt_ids":        [],
+                "chosen_ids":        [],
+                "rejected_token_id":  0,
+                "__valid": False
+            }
 
         flat_chosen = [t[0] for t in chosen_tok_ids]
 
         # don’t keep examples where rejected == one of the chosen
         if rejected_tok_ids[0] in flat_chosen:
-            return {"__valid": False}
+            return {
+                "prompt_ids":        [],
+                "chosen_ids":        [],
+                "rejected_token_id":  0,
+                "__valid": False
+            }
 
         return {
             "prompt_ids":  prompt_ids,
             "chosen_ids":  flat_chosen,       # variable-length list[int]
-            "rejected_id": rejected_tok_ids[0],
+            "rejected_token_id": rejected_tok_ids[0],
             "__valid":     True,
         }
 

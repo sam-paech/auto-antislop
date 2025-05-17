@@ -49,7 +49,7 @@ try:
 
     messages = [
         {"role": "system", "content": "You are a creative storyteller."},
-        {"role": "user", "content": "Write a short, engaging story about a princess Elara in summertime."}
+        {"role": "user", "content": "Write a short, engaging story about a princess."}
     ]
     prompt = tokenizer.apply_chat_template(messages, tokenize=False)
     print("\nApplied chat template:\n", prompt)
