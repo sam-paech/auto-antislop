@@ -997,7 +997,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                                     padding_value=pad_id)
             if prompt_ids.size(1) < max_len:
                 pad_cols = max_len - prompt_ids.size(1)
-                prompt_ids = F.pad(prompt_ids, (pad_cols, 0), value=pad_id)
+                prompt_ids = F.pad(prompt_ids, (0, pad_cols), value=pad_id)
 
             attn = prompt_ids.ne(pad_id)
             chosen   = torch.tensor([f["chosen_token_id"]   for f in features])
@@ -1010,7 +1010,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
         from torch.utils.data import DataLoader
         def _gap_stats(model, dataset, collate_fn, tag,
-               ref_model=None, use_null_ref=False, batch_size=2):
+               ref_model=None, use_null_ref=False, batch_size=8):
             model.eval()
             loader = DataLoader(dataset, batch_size=batch_size,
                                 shuffle=False, collate_fn=collate_fn)
@@ -1071,7 +1071,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         collate = lambda feats: _collate_tdpo(feats, pad_id, max_seq_length)
 
 
-        if False: # skip this check for now
+        if True: # skip this check for now
             pre_train_rows, pre_train_stats = _gap_stats(model, train_ds, collate, "train_pre", ref_model=None, use_null_ref=True)
             pre_val_rows , pre_val_stats   = _gap_stats(model, val_ds,   collate, "val_pre", ref_model=None, use_null_ref=True)
 
