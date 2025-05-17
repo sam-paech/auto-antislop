@@ -344,7 +344,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             "(last-5 prompt tokens, chosen ▸ rejected)\n")
         for i, ex in enumerate(dpo_dataset_hf.select(range(sample_n))):
             tail_prompt = tokenizer.convert_ids_to_tokens(ex["prompt_ids"][-5:])
-            chosen_tok  = tokenizer.convert_ids_to_tokens([ex["chosen_token_id"]])[0]
+            chosen_tok  = tokenizer.convert_ids_to_tokens([ex["chosen_ids"][0]])[0]
             rejected_tok = tokenizer.convert_ids_to_tokens([ex["rejected_token_id"]])[0]
             tail_str = " ".join(tail_prompt)
             print(f"{i:03d}: … {tail_str}  →  {chosen_tok} ▸ {rejected_tok}")
