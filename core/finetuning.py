@@ -1066,20 +1066,22 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         pad_id = tokenizer.pad_token_id
         collate = lambda feats: _collate_tdpo(feats, pad_id, max_seq_length)
 
-        pre_train_rows, pre_train_stats = _gap_stats(model, train_ds, collate, "train_pre", ref_model=None, use_null_ref=True)
-        pre_val_rows , pre_val_stats   = _gap_stats(model, val_ds,   collate, "val_pre", ref_model=None, use_null_ref=True)
+
+        if False: # skip this check for now
+            pre_train_rows, pre_train_stats = _gap_stats(model, train_ds, collate, "train_pre", ref_model=None, use_null_ref=True)
+            pre_val_rows , pre_val_stats   = _gap_stats(model, val_ds,   collate, "val_pre", ref_model=None, use_null_ref=True)
 
 
-        with open(analysis_dir / "train_pre.jsonl", "w") as f:
-            for r in pre_train_rows: f.write(json.dumps(r) + "\n")
-        with open(analysis_dir / "val_pre.jsonl", "w") as f:
-            for r in pre_val_rows:  f.write(json.dumps(r) + "\n")
+            with open(analysis_dir / "train_pre.jsonl", "w") as f:
+                for r in pre_train_rows: f.write(json.dumps(r) + "\n")
+            with open(analysis_dir / "val_pre.jsonl", "w") as f:
+                for r in pre_val_rows:  f.write(json.dumps(r) + "\n")
 
-        print("\n— PRE-TRAIN SUMMARY —")
-        print(pre_train_stats)
-        print(pre_val_stats)
-        print("sample train rows:", pre_train_rows[:10])
-        print("sample val rows  :", pre_val_rows [:10])
+            print("\n— PRE-TRAIN SUMMARY —")
+            print(pre_train_stats)
+            print(pre_val_stats)
+            print("sample train rows:", pre_train_rows[:10])
+            print("sample val rows  :", pre_val_rows [:10])
 
 
     import gc
