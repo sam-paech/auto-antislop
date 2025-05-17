@@ -95,7 +95,7 @@ class LastTokenDPOTrainer(DPOTrainer):
         # ── unpack ---------------------------------------------------------
         ids      = inputs["prompt_ids"].to(model.device)       # [B,L]
         attn     = inputs["attention_mask"].to(model.device)   # [B,L]
-        chosen   = inputs["chosen_token_id"].to(model.device)  # [B]
+        #chosen   = inputs["chosen_token_id"].to(model.device)  # [B]
         rejected = inputs["rejected_token_id"].to(model.device)  # [B]
 
         # ── split context vs last token -----------------------------------
