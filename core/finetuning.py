@@ -366,7 +366,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             # force-pad to static length to kill shape sprawl
             if prompt_ids.size(1) < max_len:
                 pad_cols = max_len - prompt_ids.size(1)
-                prompt_ids = F.pad(prompt_ids, (pad_cols, 0), value=pad_id)
+                prompt_ids = F.pad(prompt_ids, (0, pad_cols), value=pad_id)   # right pad
 
             attention_mask = prompt_ids.ne(pad_id)
 
