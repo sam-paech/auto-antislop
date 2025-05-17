@@ -668,7 +668,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         def compute_loss(self, model, inputs, return_outputs=False, **_):
             mode = getattr(self, "loss_mode", "clip")   # set externally
             eps  = getattr(self, "clip_eps", 0.2)       # only used in "clip"
-            beta = getattr(self, "beta", 3.0)           # reused everywhere
+            beta = getattr(self, "beta", 0.1)           # reused everywhere
 
             # ── unpack ---------------------------------------------------------
             ids      = inputs["prompt_ids"].to(model.device)       # [B,L]
@@ -745,7 +745,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 # PPO-style odds-ratio clipping
                 delta  = logp_good - logp_bad                 # log-odds
                 ratio  = torch.exp(delta)                     # odds ratio
-                clipped = torch.clamp(ratio, 1.0, 1.0 + eps)  # trust region
+                clipped = torch.minimum(ratio, torch.tensor(1.0 + eps, device=ratio.device))
                 pref_loss = -torch.log(clipped / (1.0 + eps)).mean()
                 kl_loss   = 0.0
 
@@ -764,6 +764,10 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 "choice_win": choice_win,
             }
             self.store_metrics(metrics, train_eval="train")
+
+            with torch.no_grad():
+                hist = ratio.cpu().log10().numpy()
+                print("log10 ratio stats:", hist.min(), hist.mean(), hist.max())
 
             if return_outputs:
                 return loss, metrics
