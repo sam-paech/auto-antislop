@@ -49,7 +49,7 @@ class LastTokenDPOTrainer(DPOTrainer):
 
         attention_mask = prompt_ids.ne(pad_id)
 
-        chosen   = torch.tensor([f["chosen_token_id"]   for f in features])
+        
         rejected = torch.tensor([f["rejected_token_id"] for f in features])
         # — multi-chosen support —
         if "chosen_ids" in features[0]:
@@ -61,18 +61,25 @@ class LastTokenDPOTrainer(DPOTrainer):
                 ids = torch.tensor(f["chosen_ids"])
                 chosen_pad [i, : ids.size(0)] = ids
                 chosen_mask[i, : ids.size(0)] = True
-        else:
-            chosen_pad  = None
-            chosen_mask = None
 
-        return dict(
-            prompt_ids=prompt_ids,
-            attention_mask=attention_mask,
-            chosen_token_id=chosen,          # always present
-            rejected_token_id=rejected,
-            chosen_ids=chosen_pad,           # None for plain tdpo
-            chosen_mask=chosen_mask,
-        )
+            return dict(
+                prompt_ids=prompt_ids,
+                attention_mask=attention_mask,
+                #chosen_token_id=chosen,          # always present
+                rejected_token_id=rejected,
+                chosen_ids=chosen_pad,           # None for plain tdpo
+                chosen_mask=chosen_mask,
+            )
+        else:
+            chosen   = torch.tensor([f["chosen_token_id"]   for f in features])
+            return dict(
+                prompt_ids=prompt_ids,
+                attention_mask=attention_mask,
+                chosen_token_id=chosen,          # always present
+                rejected_token_id=rejected,
+            )
+
+        
 
     # --------------------------------------------------------------------- #
     #  Allowed modes:
