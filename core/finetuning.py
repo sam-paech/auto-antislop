@@ -591,7 +591,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     # For simplicity, this example prioritizes bf16 with 4-bit.
 
 
-    TrainerClass = LastTokenDPOTrainer if mode == "tdpo" else DPOTrainer
+    TrainerClass = LastTokenDPOTrainer if mode.lower() in ["tdpo", "tdpo-multi"] else DPOTrainer
 
     dpo_trainer = TrainerClass(
         model=model,
