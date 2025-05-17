@@ -46,10 +46,10 @@ generation_chat_template_model_id: "unsloth/gemma-3-4b-it"
 # Parameters for antislop-vllm's generation_params (passed as individual CLI args)
 generation_param_chunk_size: 20
 generation_param_top_logprobs_count: 20
-generation_param_temperature: 0.7
+generation_param_temperature: 1
 generation_param_top_p: 1.0
 generation_param_top_k: 50
-generation_param_min_p: 0.05
+generation_param_min_p: 0.03
 generation_param_timeout: 480
 generation_param_stop_sequences: [] # e.g., ["\n\n", "---"]
 
