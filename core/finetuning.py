@@ -454,44 +454,60 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
         from torch.utils.data import DataLoader
         def _gap_stats(model, dataset, collate_fn, tag,
-               ref_model=None, use_null_ref=False, batch_size=2):
+               batch_size=2, device=None):
             model.eval()
             loader = DataLoader(dataset, batch_size=batch_size,
                                 shuffle=False, collate_fn=collate_fn)
+            device = device or next(model.parameters()).device
 
             rows, tot_delta, wins = [], 0.0, 0
             with torch.no_grad():
                 for batch in loader:
-                    ids   = batch["prompt_ids"     ].to(model.device)
-                    attn  = batch["attention_mask" ].to(model.device)
-                    good  = batch["chosen_token_id"].to(model.device)
-                    bad   = batch["rejected_token_id"].to(model.device)
+                    ids   = batch["prompt_ids"].to(device)
+                    attn  = batch["attention_mask"].to(device)
                     last  = attn.sum(1) - 1
+                    rej   = batch["rejected_token_id"].to(device)
 
-                    # --- policy forward ------------------------------------------------
-                    #with torch.no_grad(), torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    #logits = model(ids, attention_mask=attn).logits
-                    with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                    with torch.cuda.amp.autocast(dtype=torch.bfloat16):
                         logits = model(ids, attention_mask=attn).logits
                     logits_last = logits[torch.arange(ids.size(0)), last]
-                    lp_good = torch.log_softmax(logits_last, -1).gather(-1, good.unsqueeze(-1)).squeeze(-1)
-                    lp_bad  = torch.log_softmax(logits_last, -1).gather(-1, bad .unsqueeze(-1)).squeeze(-1)
+                    logp_all    = torch.log_softmax(logits_last, -1)
 
-                    
-                    delta = lp_good - lp_bad
+                    # ----- variant detection -----
+                    if "chosen_ids" in batch:                      # TDPO-MULTI
+                        ch_ids  = batch["chosen_ids"].to(device)
+                        ch_mask = batch["chosen_mask"].to(device)
+                        gathered = logp_all.gather(-1, ch_ids).masked_fill(~ch_mask, -1e9)
+                        lp_good = torch.logsumexp(gathered, dim=-1)        # [B]
+                    else:                                            # TDPO
+                        ch      = batch["chosen_token_id"].to(device)
+                        lp_good = logp_all.gather(-1, ch.unsqueeze(-1)).squeeze(-1)
+
+                    lp_bad  = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)
+                    delta   = lp_good - lp_bad
 
                     tot_delta += delta.sum().item()
                     wins      += (delta > 0).sum().item()
 
-                    #rows.extend([{"delta": round(float(d), 6), "chosen_id": g.item(), "rejected_id": b.item()}
-                    rows.extend([{"delta": round(d.item(), 6),  # or round(d.item(), 6)
-                        "chosen_id": g.item(),
-                        "rejected_id": b.item()}
-                        for d, g, b in zip(delta, good, bad)])
+                    # record first chosen id for debugging
+                    first_ch = (
+                        batch["chosen_ids"][:,0] if "chosen_ids" in batch
+                        else batch["chosen_token_id"]
+                    )
+                    rows.extend(
+                        {"delta": round(d.item(), 6),
+                        "chosen_id": int(c.item()),
+                        "rejected_id": int(r.item())}
+                        for d, c, r in zip(delta, first_ch, rej)
+                    )
 
             mean = tot_delta / len(dataset)
             acc  = wins / len(dataset)
-            return rows, {"tag": tag, "mean_delta": mean, "chosen_win": acc, "n": len(dataset)}
+            return rows, {"tag": tag,
+                        "mean_delta": mean,
+                        "chosen_win": acc,
+                        "n": len(dataset)}
+
 
         # ────────────────────────────────────────────────────────────────────
         # 1) train / validation split  (after max-train cap, before model load)
