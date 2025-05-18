@@ -97,32 +97,35 @@ class LastTokenDPOTrainer(DPOTrainer):
         #chosen   = inputs["chosen_token_id"].to(model.device)  # [B]
         rejected = inputs["rejected_token_id"].to(model.device)  # [B]
 
-        # ── predict next token: freeze context, grad on final step ─────────────
-        # 1) forward full prompt once (no gradients) to build past-kv
+        # ── split context / next token  (keep gradients only for the next step) ──
+        last_idx = attn.sum(1) - 1                    # still needed to build past-kv
+
+        # 1) forward full prompt (no grad) ----------------------------------------
         with torch.no_grad():
             ctx_out = model(
-                ids,                            # full left-padded prompt
+                ids,
                 attention_mask=attn,
                 use_cache=True,
                 return_dict=True,
             )
-        past_kv = ctx_out.past_key_values       # cached keys/values
+        past_kv = ctx_out.past_key_values             # cache of the whole prompt
 
-        # 2) feed a single dummy token (pad_id) to obtain next-token logits
-        tok_ids  = torch.full_like(ids, self.padding_value)   # all pad
-        tok_ids[:, -1] = self.padding_value                   # content irrelevant
-        tok_attn = torch.zeros_like(attn)                     # attend only to last col
-        tok_attn[:, -1] = 1
+        # 2) forward ONE dummy token to get next-token logits (with grad) ----------
+        tok_ids  = torch.full((ids.size(0), 1), self.padding_value,
+                            dtype=torch.long, device=model.device)   # shape [B,1]
+        tok_attn = torch.ones_like(tok_ids)                            # [B,1]
 
         tok_out = model(
             tok_ids,
             attention_mask=tok_attn,
-            past_key_values=past_kv,
+            past_key_values=past_kv,    # appends after the prompt
             use_cache=False,
             return_dict=True,
         )
-        logits_last = tok_out.logits[:, -1, :]                # [B, V]
-        logp_all    = F.log_softmax(logits_last, dim=-1)      # [B, V]
+
+        logits_last = tok_out.logits[:, 0, :]          # single step → index 0
+        logp_all    = F.log_softmax(logits_last, dim=-1)
+
 
 
         if False: #inputs.get("chosen_ids") is not None:          # TDPO-MULTI
