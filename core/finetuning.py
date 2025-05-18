@@ -469,9 +469,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             batch.update(
                 prompt_ids        = prompt_ids,
                 attention_mask    = attn_mask,
-                rejected_token_id = torch.tensor(
-                    [f.get("rejected_token_id", f["rejected_id"]) for f in features]
-                ),
+                rejected_token_id=torch.tensor([f["rejected_token_id" if "rejected_token_id" in f else "rejected_id"] for f in features]),
             )
             return batch
 
