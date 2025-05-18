@@ -604,7 +604,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         rank   = config["finetune_lora_r"]
 
         eta0   = 2e-4
-        lr     = eta0 * (B_eff / 256) ** 0.5 * (rank / 8) ** 0.5 * (1e4 / N) ** 0.5
+        LR_SCALE_CONST = 0.2
+        lr     = eta0 * (B_eff / 256) ** 0.5 * (rank / 8) ** 0.5 * (1e4 / N) ** 0.5 * LR_SCALE_CONST
         config["finetune_learning_rate"] = lr
         print(f"Auto-scaled LR = {lr:.3e}")
 
