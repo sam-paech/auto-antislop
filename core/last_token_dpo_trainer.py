@@ -151,36 +151,50 @@ class LastTokenDPOTrainer(DPOTrainer):
             
         elif inputs.get("chosen_ids") is not None:
             DEBUG = True  
-            ch_ids  = inputs["chosen_ids"].to(model.device)      # [B,C]
-            ch_mask = inputs["chosen_mask"].to(model.device)     # [B,C] bool
+            # --- unpack ----------------------------------------------------------------
+            ch_ids  = inputs["chosen_ids"].to(model.device)       # [B,C]
+            ch_mask = inputs["chosen_mask"].to(model.device)      # [B,C] bool
+            rej     = inputs["rejected_token_id"].to(model.device)  # [B]
 
-            # 1. per-token log-p and prob
-            gathered = logp_all.gather(-1, ch_ids)               # log p_i
-            probs    = gathered.exp()                            # p_i
+            # --- per-token log-p and p --------------------------------------------------
+            gathered = logp_all.gather(-1, ch_ids)                # log p_i
+            probs    = gathered.exp()                             # p_i
 
-            # 2. soft down-weight once p_i exceeds eps
+            # --- soft weight: 1 at p≤eps, linear decay to 0 at p≥1 ----------------------
             weights  = torch.clamp((eps - probs) / eps, min=0.0) * ch_mask
-            zero_rows = weights.sum(dim=-1, keepdim=True) < 1e-12
-            weights   = torch.where(zero_rows, ch_mask.float(), weights)
+            zero_row = weights.sum(dim=-1, keepdim=True) < 1e-12  # all weights zero?
+            weights  = torch.where(zero_row, ch_mask.float(), weights)
 
-            # 3. weighted mean probability, then log
             weights_sum        = weights.sum(dim=-1, keepdim=True)         # [B,1]
             weighted_mean_prob = (probs * weights).sum(dim=-1, keepdim=True) / weights_sum
             logp_good          = weighted_mean_prob.log().squeeze(-1)      # [B]
 
-            # 4. optional deep-dive prints
+            # --- rejected token ---------------------------------------------------------
+            logp_bad = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)  # [B]
+            p_bad    = logp_bad.exp()
+
+            # --- optional verbose inspection -------------------------------------------
             if DEBUG:
+                torch.set_printoptions(precision=9, sci_mode=True)
                 for b in range(ch_ids.size(0)):
-                    ids     = ch_ids[b][ch_mask[b]].tolist()
-                    p_vals  = probs[b][ch_mask[b]].tolist()
-                    w_vals  = weights[b][ch_mask[b]].tolist()
-                    print(f"── batch {b} ─────────────────────────────────")
-                    print(f"chosen ids      : {ids}")
-                    print(f"probs           : {[round(p, 6) for p in p_vals]}")
-                    print(f"weights         : {[round(w, 6) for w in w_vals]}")
-                    print(f"weighted mean p : {weighted_mean_prob[b].item():.6e}")
-                    print(f"logp_good       : {logp_good[b].item():.6f}")
-                    print("────────────────────────────────────────────")
+                    real = ch_mask[b]
+                    ids  = ch_ids[b][real].tolist()
+                    lp   = gathered[b][real]          # log p_i
+                    p    = lp.exp()
+                    w    = weights[b][real]
+
+                    print(f"\n── batch {b} ─────────────────────────────────────────")
+                    for i, (tid, lpi, pi, wi) in enumerate(zip(ids, lp, p, w)):
+                        print(f"  {i:02d}  id={tid:<6}  logp={lpi.item(): .9f}  "
+                            f"p={pi.item():.3e}  w={wi.item():.3f}")
+                    print(f"  -----")
+                    print(f"  weighted mean p : {weighted_mean_prob[b].item():.9e}")
+                    print(f"  logp_good       : {logp_good[b].item(): .9f}")
+                    print(f"  logp_bad        : {logp_bad [b].item(): .9f}")
+                    print(f"  p_bad           : {p_bad   [b].item():.3e}")
+                    print(f"  margin (Δ)      : {(logp_good[b]-logp_bad[b]).item(): .9f}")
+                    print("───────────────────────────────────────────────────")
+
 
 
         else:
