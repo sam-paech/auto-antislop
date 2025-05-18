@@ -208,9 +208,9 @@ class LastTokenDPOTrainer(DPOTrainer):
             logp_good = logp_all.gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
 
 
-        # ── log-probs ------------------------------------------------------
-        #logp_good = F.log_softmax(logits_last, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
-        logp_bad  = F.log_softmax(logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
+        # ── log-probs ------------------------------------------------------        
+        #logp_bad  = F.log_softmax(logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
+        logp_bad = logp_all.gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
         print(logp_good.detach().cpu().numpy(), logp_bad.detach().cpu().numpy(), logp_good.detach().cpu().numpy() - logp_bad.detach().cpu().numpy())
 
         # ───────────────────────────────────────────────────────────────────
