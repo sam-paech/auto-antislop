@@ -128,8 +128,8 @@ class LastTokenDPOTrainer(DPOTrainer):
         if hidden_all.dtype != target_dtype:
             hidden_all = hidden_all.to(target_dtype)
 
-        logits_all = proj(hidden_all)              # [B, L, V]
-        logp_all   = F.log_softmax(logits_all[:, -1, :], dim=-1)
+        logits_last  = proj(hidden_all)              # [B, L, V]
+        logp_all   = F.log_softmax(logits_last[:, -1, :], dim=-1)
 
 
 
