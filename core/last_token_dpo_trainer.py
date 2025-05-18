@@ -211,7 +211,7 @@ class LastTokenDPOTrainer(DPOTrainer):
         # ── log-probs ------------------------------------------------------        
         #logp_bad  = F.log_softmax(logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
         logp_bad = logp_all.gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
-        print(logp_good.detach().cpu().numpy(), logp_bad.detach().cpu().numpy(), logp_good.detach().cpu().numpy() - logp_bad.detach().cpu().numpy())
+        #print(logp_good.detach().cpu().numpy(), logp_bad.detach().cpu().numpy(), logp_good.detach().cpu().numpy() - logp_bad.detach().cpu().numpy())
 
         # ───────────────────────────────────────────────────────────────────
         #  Variant-specific preference term
