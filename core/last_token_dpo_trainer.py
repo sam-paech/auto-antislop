@@ -99,89 +99,30 @@ class LastTokenDPOTrainer(DPOTrainer):
 
         # only enable gradient flow for the final token, not for the rest of the context
         # --- obtain final-layer hidden states, independent of model class ----------
-        if False:
-            out = model(
-                ids,
-                attention_mask   = attn,
-                use_cache        = False,
-                return_dict      = True,
-                output_hidden_states = True,      # ensures .hidden_states is present
-            )
 
-            if hasattr(out, "last_hidden_state") and out.last_hidden_state is not None:
-                last_hidden = out.last_hidden_state                         # [B, L, H]
-            elif getattr(out, "hidden_states", None) is not None:
-                last_hidden = out.hidden_states[-1]                         # [B, L, H]
-            else:
-                raise ValueError(
-                    "Model output has neither `last_hidden_state` nor `hidden_states`. "
-                    "Enable `output_hidden_states=True` when calling the model."
-            )
+        # -- forward -----------------------------------------------------------------
+        out = model(ids,
+                    attention_mask=attn,
+                    use_cache=False,
+                    return_dict=True,
+                    output_hidden_states=True)
 
-            # --- freeze prompt, leave grad on the final position -----------------------
-            #hidden_all = last_hidden.detach().clone()       # no grad anywhere
-            #hidden_all[:, -1, :] = last_hidden[:, -1, :]     # restore grad on last token
+        last_hidden = (out.last_hidden_state
+                    if getattr(out, "last_hidden_state", None) is not None
+                    else out.hidden_states[-1])                       # [B, L, H]
 
-            #hidden_all = last_hidden.clone()        # keep autograd
-            #hidden_all[:, :-1, :].detach_()         # freeze prompt tokens
+        # ----- single position ------------------------------------------------------
+        proj         = self._get_proj(model)
+        target_dtype = proj.weight.dtype
+        last_token   = last_hidden[:, -1, :].to(target_dtype)           # [B, H]
 
-            hidden_all = last_hidden.clone()        # keep autograd
-            hidden_all[:, :-1, :] = hidden_all[:, :-1, :].detach()  # freeze prompt tokens
-
-
-            # --- logits & log-probs -----------------------------------------------------
-            proj = self._get_proj(model)               # output-projection
-            target_dtype = proj.weight.dtype           # fp32 / fp16 / bf16
-
-            if hidden_all.dtype != target_dtype:
-                hidden_all = hidden_all.to(target_dtype)
-
-            logits_last  = proj(hidden_all)              # [B, L, V]
-            logp_all   = F.log_softmax(logits_last[:, -1, :], dim=-1)
-
-        if True:
-            # -- forward -----------------------------------------------------------------
-            out = model(ids,
-                        attention_mask=attn,
-                        use_cache=False,
-                        return_dict=True,
-                        output_hidden_states=True)
-
-            last_hidden = (out.last_hidden_state
-                        if getattr(out, "last_hidden_state", None) is not None
-                        else out.hidden_states[-1])                       # [B, L, H]
-
-            # ----- single position ------------------------------------------------------
-            proj         = self._get_proj(model)
-            target_dtype = proj.weight.dtype
-            last_token   = last_hidden[:, -1, :].to(target_dtype)           # [B, H]
-
-            logits_last  = proj(last_token)                                 # [B, V]
-            logp_all     = F.log_softmax(logits_last, dim=-1)               # [B, V]
+        logits_last  = proj(last_token)                                 # [B, V]
+        logp_all     = F.log_softmax(logits_last, dim=-1)               # [B, V]
 
 
 
 
-        if False: #inputs.get("chosen_ids") is not None:          # TDPO-MULTI
-            ch_ids  = inputs["chosen_ids"].to(model.device)      # [B,C]
-            ch_mask = inputs["chosen_mask"].to(model.device)
-
-            # gather per-token log-probs, keep padding at −1e9
-            gathered = logp_all.gather(-1, ch_ids).masked_fill(~ch_mask, -1e9)
-
-            # ── NEW: freeze gradients for high-prob tokens ────────────────────
-            probs        = gathered.exp()                     # p = e^{log p}
-            detach_mask  = (probs > eps) & ch_mask           # ignore padding
-            gathered     = torch.where(detach_mask,
-                                    gathered.detach(),    # no grad
-                                    gathered)             # keep grad
-
-            #logp_good = torch.logsumexp(gathered, dim=-1)     # [B]
-
-            count = ch_mask.sum(dim=-1, keepdim=True) # [B,1]
-            logp_good = torch.logsumexp(gathered, dim=-1) - count.log().squeeze(-1)
-            
-        elif inputs.get("chosen_ids") is not None:
+        if inputs.get("chosen_ids") is not None:
             DEBUG = False  
             # --- unpack ----------------------------------------------------------------
             ch_ids  = inputs["chosen_ids"].to(model.device)       # [B,C]
@@ -244,32 +185,54 @@ class LastTokenDPOTrainer(DPOTrainer):
         #  Variant-specific preference term
         # ───────────────────────────────────────────────────────────────────
         if mode == "ref":
-            # compute reference logits once, only if needed
+            # ── reference pass (no grads) ─────────────────────────────────────
             with torch.no_grad():
                 if self.ref_model is None:
+                    # fall back to the “frozen copy of self” context manager
                     with self.null_ref_context():
-                        ref_tok_out = model(
-                            tok_ids,
-                            attention_mask=tok_attn,
-                            past_key_values=past_kv,
+                        ref_out = model(
+                            ids,
+                            attention_mask=attn,
                             use_cache=False,
                             return_dict=True,
                         )
                 else:
-                    ref_tok_out = self.ref_model(
-                        tok_ids,
-                        attention_mask=tok_attn,
-                        past_key_values=past_kv,
+                    ref_out = self.ref_model(
+                        ids,
+                        attention_mask=attn,
                         use_cache=False,
                         return_dict=True,
                     )
-                ref_logits_last = ref_tok_out.logits[torch.arange(ids.size(0), device=model.device), last_idx]
-                ref_good = F.log_softmax(ref_logits_last, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
-                ref_bad  = F.log_softmax(ref_logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
 
-            delta = (logp_good - ref_good) - (logp_bad - ref_bad)
+                # final-token logits → log-probs
+                ref_logits_last = ref_out.logits[:, -1, :]                 # [B,V]
+                ref_logp_all    = F.log_softmax(ref_logits_last, dim=-1)
+
+                if inputs.get("chosen_ids") is not None:
+                    # multi-winner branch
+                    ref_gathered = ref_logp_all.gather(-1, ch_ids)         # [B,C]
+                    ref_probs    = ref_gathered.exp()
+                    ref_weights  = torch.clamp((eps - ref_probs) / eps, min=0.0) * ch_mask
+                    zero_row     = ref_weights.sum(dim=-1, keepdim=True) < 1e-12
+                    ref_weights  = torch.where(zero_row, ch_mask.float(), ref_weights)
+                    ref_wsum     = ref_weights.sum(dim=-1, keepdim=True)
+                    ref_mean_p   = (ref_probs * ref_weights).sum(dim=-1, keepdim=True) / ref_wsum
+                    ref_good     = ref_mean_p.log().squeeze(-1)            # [B]
+                else:
+                    # single-token branch
+                    ref_good = ref_logp_all.gather(
+                        -1, chosen.unsqueeze(-1)
+                    ).squeeze(-1)                                          # [B]
+
+                ref_bad = ref_logp_all.gather(
+                    -1, rejected.unsqueeze(-1)
+                ).squeeze(-1)                                              # [B]
+
+            # ── preference loss using reference offset ─────────────────────
+            delta     = (logp_good - ref_good) - (logp_bad - ref_bad)
             pref_loss = -F.logsigmoid(beta * delta).mean()
-            kl_loss   = 0.0                                # keep prompt-KL off for now
+            kl_loss   = 0.0  # prompt-KL off for now
+
 
         elif mode == "clip":
             # PPO-style odds-ratio clipping
