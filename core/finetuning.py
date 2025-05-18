@@ -632,6 +632,22 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         return
     
 
+    from torch.nn.utils import parameters_to_vector
+
+    def l2_norm_of_trainable(model):
+        vec = parameters_to_vector([p for p in model.parameters() if p.requires_grad])
+        return vec.norm().item()
+
+    print("LoRA weight L2 before ↦", l2_norm_of_trainable(model))
+
+    # reload the *fresh* base+LoRA (no updates) for comparison
+    base, _   = FastLanguageModel.from_pretrained(model_name,
+                                                max_seq_length=max_seq_length,
+                                                load_in_4bit=config['finetune_load_in_4bit'])
+    base_lora = FastLanguageModel.get_peft_model(base, **{k:v for k,v in config.items()
+                                                        if k.startswith("finetune_")})
+    print("LoRA weight L2 fresh  ↦", l2_norm_of_trainable(base_lora))
+
 
     if CALC_VAL_STATS:
         # ────────────────────────────────────────────────────────────────────
