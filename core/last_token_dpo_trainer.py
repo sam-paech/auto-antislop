@@ -144,7 +144,10 @@ class LastTokenDPOTrainer(DPOTrainer):
                                     gathered.detach(),    # no grad
                                     gathered)             # keep grad
 
-            logp_good = torch.logsumexp(gathered, dim=-1)     # [B]
+            #logp_good = torch.logsumexp(gathered, dim=-1)     # [B]
+
+            count = ch_mask.sum(dim=-1, keepdim=True) # [B,1]
+            logp_good = torch.logsumexp(gathered, dim=-1) - count.log().squeeze(-1)
             
         else:
             # single-token path
