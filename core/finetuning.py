@@ -622,6 +622,12 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     logger.info(f"Starting training. Output will be in {finetune_output_dir}. Check tensorboard for progress.")
 
+    def lora_snapshot(m):
+        return {n: p.detach().cpu().clone()
+                for n,p in m.named_parameters() if p.requires_grad}
+
+    before = lora_snapshot(model)          # snapshot *after* training
+
     try:
         trainer_stats = dpo_trainer.train()
         logger.info("DPO training finished.")
@@ -632,22 +638,12 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         return
     
 
-    from torch.nn.utils import parameters_to_vector
+    
+    #dpo_trainer.train(resume_from_checkpoint=None, max_steps=1)  # 1 extra step
+    after  = lora_snapshot(model)
 
-    def l2_norm_of_trainable(model):
-        vec = parameters_to_vector([p for p in model.parameters() if p.requires_grad])
-        return vec.norm().item()
-
-    print("LoRA weight L2 before ↦", l2_norm_of_trainable(model))
-
-    # reload the *fresh* base+LoRA (no updates) for comparison
-    base, _   = FastLanguageModel.from_pretrained(model_name,
-                                                max_seq_length=max_seq_length,
-                                                load_in_4bit=config['finetune_load_in_4bit'])
-    base_lora = FastLanguageModel.get_peft_model(base, **{k:v for k,v in config.items()
-                                                        if k.startswith("finetune_")})
-    print("LoRA weight L2 fresh  ↦", l2_norm_of_trainable(base_lora))
-
+    delta = {n: (after[n] - before[n]).abs().mean().item() for n in before}
+    print("mean |Δ| across LoRA mats:", sum(delta.values()) / len(delta))
 
     if CALC_VAL_STATS:
         # ────────────────────────────────────────────────────────────────────
