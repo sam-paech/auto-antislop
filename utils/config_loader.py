@@ -109,6 +109,7 @@ _FINETUNE: Sequence[str] = (
     "finetune_warmup_ratio",
     "finetune_num_epochs",
     "finetune_learning_rate",
+    "finetune_auto_learning_rate",
     "finetune_beta",
     "finetune_output_dir_suffix",
     "finetune_save_merged_16bit",

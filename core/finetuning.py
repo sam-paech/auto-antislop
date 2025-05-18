@@ -597,6 +597,18 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     # For simplicity, this example prioritizes bf16 with 4-bit.
 
 
+    # --- derive LR automatically --------------------------------------------    
+    if config.get("finetune_auto_learning_rate", False):
+        N      = len(dpo_dataset_hf)
+        B_eff  = config["finetune_batch_size"] * config["finetune_gradient_accumulation_steps"]
+        rank   = config["finetune_lora_r"]
+
+        eta0   = 2e-4
+        lr     = eta0 * (B_eff / 256) ** 0.5 * (rank / 8) ** 0.5 * (1e4 / N) ** 0.5
+        config["finetune_learning_rate"] = lr
+        print(f"Auto-scaled LR = {lr:.3e}")
+
+
     TrainerClass = LastTokenDPOTrainer if mode.lower() in ["tdpo", "tdpo-multi"] else DPOTrainer
 
     dpo_trainer = TrainerClass(
@@ -624,6 +636,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             fp16=use_fp16, # Ensure only one is true or both false
             remove_unused_columns=False,
             disable_tqdm=False,
+            max_grad_norm=0.5, # be nice to the baseline model
         ),
     )
 
