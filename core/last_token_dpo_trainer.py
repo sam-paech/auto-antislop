@@ -121,8 +121,13 @@ class LastTokenDPOTrainer(DPOTrainer):
             # --- freeze prompt, leave grad on the final position -----------------------
             #hidden_all = last_hidden.detach().clone()       # no grad anywhere
             #hidden_all[:, -1, :] = last_hidden[:, -1, :]     # restore grad on last token
+
+            #hidden_all = last_hidden.clone()        # keep autograd
+            #hidden_all[:, :-1, :].detach_()         # freeze prompt tokens
+
             hidden_all = last_hidden.clone()        # keep autograd
-            hidden_all[:, :-1, :].detach_()         # freeze prompt tokens
+            hidden_all[:, :-1, :] = hidden_all[:, :-1, :].detach()  # freeze prompt tokens
+
 
             # --- logits & log-probs -----------------------------------------------------
             proj = self._get_proj(model)               # output-projection
@@ -134,24 +139,25 @@ class LastTokenDPOTrainer(DPOTrainer):
             logits_last  = proj(hidden_all)              # [B, L, V]
             logp_all   = F.log_softmax(logits_last[:, -1, :], dim=-1)
 
-        # -- forward -----------------------------------------------------------------
-        out = model(ids,
-                    attention_mask=attn,
-                    use_cache=False,
-                    return_dict=True,
-                    output_hidden_states=True)
+        if True:
+            # -- forward -----------------------------------------------------------------
+            out = model(ids,
+                        attention_mask=attn,
+                        use_cache=False,
+                        return_dict=True,
+                        output_hidden_states=True)
 
-        last_hidden = (out.last_hidden_state
-                    if getattr(out, "last_hidden_state", None) is not None
-                    else out.hidden_states[-1])                       # [B, L, H]
+            last_hidden = (out.last_hidden_state
+                        if getattr(out, "last_hidden_state", None) is not None
+                        else out.hidden_states[-1])                       # [B, L, H]
 
-        # ----- single position ------------------------------------------------------
-        proj         = self._get_proj(model)
-        target_dtype = proj.weight.dtype
-        last_token   = last_hidden[:, -1, :].to(target_dtype)           # [B, H]
+            # ----- single position ------------------------------------------------------
+            proj         = self._get_proj(model)
+            target_dtype = proj.weight.dtype
+            last_token   = last_hidden[:, -1, :].to(target_dtype)           # [B, H]
 
-        logits_last  = proj(last_token)                                 # [B, V]
-        logp_all     = F.log_softmax(logits_last, dim=-1)               # [B, V]
+            logits_last  = proj(last_token)                                 # [B, V]
+            logp_all     = F.log_softmax(logits_last, dim=-1)               # [B, V]
 
 
 
