@@ -370,8 +370,13 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     
 
 
-
-    
+    locs = {}
+    for n, p in model.named_parameters():
+        locs.setdefault(p.device.type, 0)
+        locs[p.device.type] += 1
+    print(locs)                              # e.g. {'cpu': 82, 'cuda': 0}
+    print("first param device:", next(model.parameters()).device)
+        
 
 
     
