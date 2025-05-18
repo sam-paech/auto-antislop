@@ -340,7 +340,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         #         –– gated by new config flag `finetune_debug_tdpo_tokens`.
         # ──────────────────────────────────────────────────────────────
         sample_n = min(50, len(dpo_dataset_hf))
-        print(f"\n🔎 TDPO debug: showing {sample_n} examples "
+        print(f"\n🔎 TDPO-multi debug: showing {sample_n} examples "
             "(last-5 prompt tokens, chosen ▸ rejected)\n")
         for i, ex in enumerate(dpo_dataset_hf.select(range(sample_n))):
             tail_prompt = tokenizer.convert_ids_to_tokens(ex["prompt_ids"][-5:])
@@ -348,7 +348,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             rejected_tok = tokenizer.convert_ids_to_tokens([ex["rejected_token_id"]])[0]
             tail_str = " ".join(tail_prompt)
             print(f"{i:03d}: … {tail_str}  →  {chosen_tok} ▸ {rejected_tok}")
-        print("\n—— end TDPO debug ——\n")
+        print("\n—— end TDPO-multi debug ——\n")
 
     else:
         logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'tdpo'.")

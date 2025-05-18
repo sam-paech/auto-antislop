@@ -145,6 +145,7 @@ class LastTokenDPOTrainer(DPOTrainer):
                                     gathered)             # keep grad
 
             logp_good = torch.logsumexp(gathered, dim=-1)     # [B]
+            print(logp_good.detach().cpu().numpy())
         else:
             # single-token path
             chosen = inputs["chosen_token_id"].to(model.device)
