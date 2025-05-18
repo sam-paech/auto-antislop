@@ -149,25 +149,39 @@ class LastTokenDPOTrainer(DPOTrainer):
             count = ch_mask.sum(dim=-1, keepdim=True) # [B,1]
             logp_good = torch.logsumexp(gathered, dim=-1) - count.log().squeeze(-1)
             
-        elif inputs.get("chosen_ids") is not None:           # TDPO-MULTI
+        elif inputs.get("chosen_ids") is not None:
+            DEBUG = True  
             ch_ids  = inputs["chosen_ids"].to(model.device)      # [B,C]
             ch_mask = inputs["chosen_mask"].to(model.device)     # [B,C] bool
 
-            gathered = logp_all.gather(-1, ch_ids)               # log p for each candidate
-            probs    = gathered.exp()                            # convert → p
+            # 1. per-token log-p and prob
+            gathered = logp_all.gather(-1, ch_ids)               # log p_i
+            probs    = gathered.exp()                            # p_i
 
-            # linear fall-off weight: 1 at p≤eps, 0 at p≥1
+            # 2. soft down-weight once p_i exceeds eps
             weights  = torch.clamp((eps - probs) / eps, min=0.0) * ch_mask
-
-            # fallback: if every candidate in a row was fully down-weighted,
-            # use uniform weights so we still get a gradient signal
             zero_rows = weights.sum(dim=-1, keepdim=True) < 1e-12
             weights   = torch.where(zero_rows, ch_mask.float(), weights)
 
-            weights_sum = weights.sum(dim=-1, keepdim=True)           # [B,1]
+            # 3. weighted mean probability, then log
+            weights_sum        = weights.sum(dim=-1, keepdim=True)         # [B,1]
             weighted_mean_prob = (probs * weights).sum(dim=-1, keepdim=True) / weights_sum
+            logp_good          = weighted_mean_prob.log().squeeze(-1)      # [B]
 
-            logp_good = weighted_mean_prob.log().squeeze(-1)          # [B]
+            # 4. optional deep-dive prints
+            if DEBUG:
+                for b in range(ch_ids.size(0)):
+                    ids     = ch_ids[b][ch_mask[b]].tolist()
+                    p_vals  = probs[b][ch_mask[b]].tolist()
+                    w_vals  = weights[b][ch_mask[b]].tolist()
+                    print(f"── batch {b} ─────────────────────────────────")
+                    print(f"chosen ids      : {ids}")
+                    print(f"probs           : {[round(p, 6) for p in p_vals]}")
+                    print(f"weights         : {[round(w, 6) for w in w_vals]}")
+                    print(f"weighted mean p : {weighted_mean_prob[b].item():.6e}")
+                    print(f"logp_good       : {logp_good[b].item():.6f}")
+                    print("────────────────────────────────────────────")
+
 
         else:
             # single-token path
