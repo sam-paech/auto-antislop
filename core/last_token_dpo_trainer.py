@@ -33,51 +33,50 @@ class LastTokenDPOTrainer(DPOTrainer):
 
     # ──────────────────────────────────────────────────────────────
     def tdpo_collator(self, features):
-        pad_id = self.padding_value
-        max_len = self.args.max_length        # 4096 from your config
+        """
+        Left-pads every prompt to `self.args.max_length`, so the last real
+        token is always at position -1.  That lets the loss read logits
+        with a single slice ([:, -1, :]).
+        """
+        pad_id   = self.padding_value
+        max_len  = self.args.max_length
+        batch_sz = len(features)
 
-        # regular left-pad so we keep right-alignment semantics
-        prompt_tensors = [torch.tensor(f["prompt_ids"]) for f in features]
-        prompt_ids = pad_sequence(prompt_tensors,
-                                batch_first=True,
-                                padding_value=pad_id)
+        # ── build [B, L] prompt tensor ───────────────────────────────
+        prompt_ids   = torch.full((batch_sz, max_len), pad_id, dtype=torch.long)
+        attention_ms = torch.zeros_like(prompt_ids, dtype=torch.bool)
 
-        # force-pad to static length to kill shape sprawl
-        if prompt_ids.size(1) < max_len:
-            pad_cols = max_len - prompt_ids.size(1)
-            prompt_ids = F.pad(prompt_ids, (0, pad_cols), value=pad_id)   # right pad
+        for i, feat in enumerate(features):
+            seq = torch.tensor(feat["prompt_ids"], dtype=torch.long)
+            if seq.size(0) > max_len:
+                seq = seq[-max_len:]                    # truncate left if over-long
+            prompt_ids[i, -seq.size(0):] = seq          # left-pad
+            attention_ms[i, -seq.size(0):] = True
 
-        attention_mask = prompt_ids.ne(pad_id)
+        # ── universal fields ─────────────────────────────────────────
+        batch = dict(
+            prompt_ids      = prompt_ids,
+            attention_mask  = attention_ms,
+            rejected_token_id = torch.tensor([f["rejected_token_id"] for f in features]),
+        )
 
-        
-        rejected = torch.tensor([f["rejected_token_id"] for f in features])
-        # — multi-chosen support —
+        # ── TDPO-MULTI vs single-token branch ────────────────────────
         if "chosen_ids" in features[0]:
             max_c = max(len(f["chosen_ids"]) for f in features)
-            chosen_pad  = torch.full((len(features), max_c),
-                                        -100, dtype=torch.long)
+            chosen_pad  = torch.full((batch_sz, max_c), -100, dtype=torch.long)
             chosen_mask = torch.zeros_like(chosen_pad, dtype=torch.bool)
             for i, f in enumerate(features):
-                ids = torch.tensor(f["chosen_ids"])
-                chosen_pad [i, : ids.size(0)] = ids
-                chosen_mask[i, : ids.size(0)] = True
-
-            return dict(
-                prompt_ids=prompt_ids,
-                attention_mask=attention_mask,
-                #chosen_token_id=chosen,          # always present
-                rejected_token_id=rejected,
-                chosen_ids=chosen_pad,           # None for plain tdpo
-                chosen_mask=chosen_mask,
-            )
+                ids = torch.tensor(f["chosen_ids"], dtype=torch.long)
+                chosen_pad [i, :ids.size(0)] = ids
+                chosen_mask[i, :ids.size(0)] = True
+            batch.update(chosen_ids = chosen_pad,
+                        chosen_mask = chosen_mask)
         else:
-            chosen   = torch.tensor([f["chosen_token_id"]   for f in features])
-            return dict(
-                prompt_ids=prompt_ids,
-                attention_mask=attention_mask,
-                chosen_token_id=chosen,          # always present
-                rejected_token_id=rejected,
-            )
+            batch.update(chosen_token_id = torch.tensor([f["chosen_token_id"]
+                                                        for f in features]))
+
+        return batch
+
 
         
 
@@ -98,27 +97,23 @@ class LastTokenDPOTrainer(DPOTrainer):
         #chosen   = inputs["chosen_token_id"].to(model.device)  # [B]
         rejected = inputs["rejected_token_id"].to(model.device)  # [B]
 
-        # ── split context vs last token -----------------------------------
-        last_idx = attn.sum(1) - 1                             # [B]
-        ctx_ids  = ids.clone()
-        tok_ids  = torch.zeros_like(ids)
-        for b, idx in enumerate(last_idx):
-            ctx_ids[b, idx] = self.padding_value
-            tok_ids[b, idx] = ids[b, idx]
-        ctx_attn = ctx_ids.ne(self.padding_value)
-        tok_attn = tok_ids.ne(0)
-
-        # ── 1 ▸ forward context (no grad) ---------------------------------
+        # ── predict next token: freeze context, grad on final step ─────────────
+        # 1) forward full prompt once (no gradients) to build past-kv
         with torch.no_grad():
             ctx_out = model(
-                ctx_ids,
-                attention_mask=ctx_attn,
+                ids,                            # full left-padded prompt
+                attention_mask=attn,
                 use_cache=True,
                 return_dict=True,
             )
-            past_kv = ctx_out.past_key_values
+        past_kv = ctx_out.past_key_values       # cached keys/values
 
-        # ── 2 ▸ forward last token (grad) ---------------------------------
+        # 2) feed a single dummy token (pad_id) to obtain next-token logits
+        tok_ids  = torch.full_like(ids, self.padding_value)   # all pad
+        tok_ids[:, -1] = self.padding_value                   # content irrelevant
+        tok_attn = torch.zeros_like(attn)                     # attend only to last col
+        tok_attn[:, -1] = 1
+
         tok_out = model(
             tok_ids,
             attention_mask=tok_attn,
@@ -126,9 +121,9 @@ class LastTokenDPOTrainer(DPOTrainer):
             use_cache=False,
             return_dict=True,
         )
-        logits_last = tok_out.logits[torch.arange(ids.size(0), device=model.device), last_idx]
+        logits_last = tok_out.logits[:, -1, :]                # [B, V]
+        logp_all    = F.log_softmax(logits_last, dim=-1)      # [B, V]
 
-        logp_all = F.log_softmax(logits_last, -1)
 
         if False: #inputs.get("chosen_ids") is not None:          # TDPO-MULTI
             ch_ids  = inputs["chosen_ids"].to(model.device)      # [B,C]
