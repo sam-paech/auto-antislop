@@ -139,6 +139,7 @@ finetune_load_in_4bit: false
 finetune_lora_r: 8
 finetune_lora_alpha: 8
 finetune_lora_dropout: 0.05
+finetune_weight_decay: 0.01
 finetune_target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 finetune_gradient_checkpointing: "unsloth"
 finetune_chat_template: "" # e.g. "gemma-3" -- get the chat template from unsloth's helper if required, otherwise leave the string blank to use the tokeniser's chat template

@@ -100,6 +100,7 @@ _FINETUNE: Sequence[str] = (
     "finetune_lora_r",
     "finetune_lora_alpha",
     "finetune_lora_dropout",
+    "finetune_weight_decay",
     "finetune_target_modules",
     "finetune_gradient_checkpointing",
     "finetune_chat_template",

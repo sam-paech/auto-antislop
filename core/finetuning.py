@@ -407,7 +407,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         model,
         r=config['finetune_lora_r'],
         lora_alpha=config['finetune_lora_alpha'],
-        #lora_dropout=config['finetune_lora_dropout'],
+        lora_dropout=config['finetune_lora_dropout'],
         bias="none",
         target_modules=config['finetune_target_modules'],
         use_gradient_checkpointing=config['finetune_gradient_checkpointing'],
@@ -617,6 +617,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             max_length=max_seq_length,
             max_prompt_length=max_seq_length // 2,
             beta=config['finetune_beta'],
+            weight_decay=config['finetune_weight_decay'],
             report_to="tensorboard", # Changed to tensorboard for local runs
             lr_scheduler_type="linear",
             bf16=use_bf16,
