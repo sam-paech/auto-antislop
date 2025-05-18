@@ -118,8 +118,10 @@ class LastTokenDPOTrainer(DPOTrainer):
         )
 
         # --- freeze prompt, leave grad on the final position -----------------------
-        hidden_all = last_hidden.detach().clone()       # no grad anywhere
-        hidden_all[:, -1, :] = last_hidden[:, -1, :]     # restore grad on last token
+        #hidden_all = last_hidden.detach().clone()       # no grad anywhere
+        #hidden_all[:, -1, :] = last_hidden[:, -1, :]     # restore grad on last token
+        hidden_all = last_hidden.clone()        # keep autograd
+        hidden_all[:, :-1, :].detach_()         # freeze prompt tokens
 
         # --- logits & log-probs -----------------------------------------------------
         proj = self._get_proj(model)               # output-projection
