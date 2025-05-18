@@ -130,7 +130,7 @@ class LastTokenDPOTrainer(DPOTrainer):
 
         logp_all = F.log_softmax(logits_last, -1)
 
-        if inputs.get("chosen_ids") is not None:          # TDPO-MULTI
+        if False: #inputs.get("chosen_ids") is not None:          # TDPO-MULTI
             ch_ids  = inputs["chosen_ids"].to(model.device)      # [B,C]
             ch_mask = inputs["chosen_mask"].to(model.device)
 
@@ -149,6 +149,26 @@ class LastTokenDPOTrainer(DPOTrainer):
             count = ch_mask.sum(dim=-1, keepdim=True) # [B,1]
             logp_good = torch.logsumexp(gathered, dim=-1) - count.log().squeeze(-1)
             
+        elif inputs.get("chosen_ids") is not None:           # TDPO-MULTI
+            ch_ids  = inputs["chosen_ids"].to(model.device)      # [B,C]
+            ch_mask = inputs["chosen_mask"].to(model.device)     # [B,C] bool
+
+            gathered = logp_all.gather(-1, ch_ids)               # log p for each candidate
+            probs    = gathered.exp()                            # convert → p
+
+            # linear fall-off weight: 1 at p≤eps, 0 at p≥1
+            weights  = torch.clamp((eps - probs) / eps, min=0.0) * ch_mask
+
+            # fallback: if every candidate in a row was fully down-weighted,
+            # use uniform weights so we still get a gradient signal
+            zero_rows = weights.sum(dim=-1, keepdim=True) < 1e-12
+            weights   = torch.where(zero_rows, ch_mask.float(), weights)
+
+            weights_sum = weights.sum(dim=-1, keepdim=True)           # [B,1]
+            weighted_mean_prob = (probs * weights).sum(dim=-1, keepdim=True) / weights_sum
+
+            logp_good = weighted_mean_prob.log().squeeze(-1)          # [B]
+
         else:
             # single-token path
             chosen = inputs["chosen_token_id"].to(model.device)
