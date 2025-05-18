@@ -578,7 +578,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
 
 
-    freeze_early_layers(model, n_unfrozen = 8, verbose = True)
+    #freeze_early_layers(model, n_unfrozen = 8, verbose = True)
 
 
     # --- DPO Trainer Setup ---
