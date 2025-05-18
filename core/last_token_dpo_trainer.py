@@ -145,7 +145,7 @@ class LastTokenDPOTrainer(DPOTrainer):
                                     gathered)             # keep grad
 
             logp_good = torch.logsumexp(gathered, dim=-1)     # [B]
-            print(logp_good.detach().cpu().numpy())
+            
         else:
             # single-token path
             chosen = inputs["chosen_token_id"].to(model.device)
@@ -155,6 +155,7 @@ class LastTokenDPOTrainer(DPOTrainer):
         # ── log-probs ------------------------------------------------------
         #logp_good = F.log_softmax(logits_last, -1).gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
         logp_bad  = F.log_softmax(logits_last, -1).gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
+        print(logp_good.detach().cpu().numpy(), logp_bad.detach().cpu().numpy(), logp_good.detach().cpu().numpy() - logp_bad.detach().cpu().numpy())
 
         # ───────────────────────────────────────────────────────────────────
         #  Variant-specific preference term
