@@ -97,34 +97,15 @@ class LastTokenDPOTrainer(DPOTrainer):
         #chosen   = inputs["chosen_token_id"].to(model.device)  # [B]
         rejected = inputs["rejected_token_id"].to(model.device)  # [B]
 
-        # ── split context / next token  (keep gradients only for the next step) ──
-        last_idx = attn.sum(1) - 1                    # still needed to build past-kv
+        # only enable gradient flow for the final token, not for the rest of the context
+        out        = model(ids, attention_mask=attn, use_cache=False, return_dict=True)
+        hidden_all = out.last_hidden_state.detach().clone()     # freeze prompt
+        hidden_all[:, -1, :] = out.last_hidden_state[:, -1, :]  # restore grad on last pos
 
-        # 1) forward full prompt (no grad) ----------------------------------------
-        with torch.no_grad():
-            ctx_out = model(
-                ids,
-                attention_mask=attn,
-                use_cache=True,
-                return_dict=True,
-            )
-        past_kv = ctx_out.past_key_values             # cache of the whole prompt
+        logits_last = model.lm_head(hidden_all)                 # or _get_proj(model)(hidden_all)
+        logp_all    = F.log_softmax(logits_last[:, -1, :], dim=-1)
 
-        # 2) forward ONE dummy token to get next-token logits (with grad) ----------
-        tok_ids  = torch.full((ids.size(0), 1), self.padding_value,
-                            dtype=torch.long, device=model.device)   # shape [B,1]
-        tok_attn = torch.ones_like(tok_ids)                            # [B,1]
 
-        tok_out = model(
-            tok_ids,
-            attention_mask=tok_attn,
-            past_key_values=past_kv,    # appends after the prompt
-            use_cache=False,
-            return_dict=True,
-        )
-
-        logits_last = tok_out.logits[:, 0, :]          # single step → index 0
-        logp_all    = F.log_softmax(logits_last, dim=-1)
 
 
 
