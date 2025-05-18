@@ -113,6 +113,8 @@ def _build_generation_command(
         "--min-p", str(config['generation_param_min_p']),
         "--timeout", str(config['generation_param_timeout']),
         "--max-retries-per-position", str(config['generation_backtracking_max_retries_per_position']),
+        "--force-backtrack", str(config['generation_force_backtrack']),
+        "--invert-probs", str(config['generation_invert_probs']),
         "--ngram-remove-stopwords", str(config['generation_ngram_remove_stopwords']).lower(),
         "--ngram-language", config['generation_ngram_language'],
     ]

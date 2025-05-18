@@ -55,6 +55,9 @@ _GENERATION: Sequence[str] = (
     "generation_backtracking_max_retries_per_position",
     "generation_ngram_remove_stopwords",
     "generation_ngram_language",
+    "generation_force_backtrack",
+    "generation_invert_probs",
+
 )
 
 _NGRAM: Sequence[str] = (

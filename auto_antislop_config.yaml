@@ -56,6 +56,18 @@ generation_param_stop_sequences: [] # e.g., ["\n\n", "---"]
 # Parameters for antislop-vllm's backtracking (passed as individual CLI args)
 generation_backtracking_max_retries_per_position: 20
 
+# If set to true:
+  #   when resampling after backtracking, if we don't find a valid replacement token
+  #   we progressively disable sampling options (temp, then min_p, then top_p, then top_k)
+  #   until we find a non-banned replacement or run out of candidates.
+generation_force_backtrack: false
+
+# Inverts the probability distribution after other sampling modifications have been applied
+  #    This encourages selection of the tail of the top n candidates, for more diverse outputs.
+  #    You should probably only use this if using min_p to constrain the distribution.
+  #    otherwise you will likely get incoherent completions.
+generation_invert_probs: true
+
 # Parameters for antislop-vllm's ngram_validator (passed as individual CLI args)
 # N-gram ban list file is managed by auto-antislop's iterative process.
 generation_ngram_remove_stopwords: true
