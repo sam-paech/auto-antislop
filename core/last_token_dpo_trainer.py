@@ -122,9 +122,14 @@ class LastTokenDPOTrainer(DPOTrainer):
         hidden_all[:, -1, :] = last_hidden[:, -1, :]     # restore grad on last token
 
         # --- logits & log-probs -----------------------------------------------------
-        proj        = self._get_proj(model)              # model-agnostic projection
-        logits_all  = proj(hidden_all)                   # [B, L, |V|]
-        logp_all    = F.log_softmax(logits_all[:, -1, :], dim=-1)  # [B, |V|]
+        proj = self._get_proj(model)               # output-projection
+        target_dtype = proj.weight.dtype           # fp32 / fp16 / bf16
+
+        if hidden_all.dtype != target_dtype:
+            hidden_all = hidden_all.to(target_dtype)
+
+        logits_all = proj(hidden_all)              # [B, L, V]
+        logp_all   = F.log_softmax(logits_all[:, -1, :], dim=-1)
 
 
 
