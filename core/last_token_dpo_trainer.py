@@ -98,12 +98,33 @@ class LastTokenDPOTrainer(DPOTrainer):
         rejected = inputs["rejected_token_id"].to(model.device)  # [B]
 
         # only enable gradient flow for the final token, not for the rest of the context
-        out        = model(ids, attention_mask=attn, use_cache=False, return_dict=True)
-        hidden_all = out.last_hidden_state.detach().clone()     # freeze prompt
-        hidden_all[:, -1, :] = out.last_hidden_state[:, -1, :]  # restore grad on last pos
+        # --- obtain final-layer hidden states, independent of model class ----------
+        out = model(
+            ids,
+            attention_mask   = attn,
+            use_cache        = False,
+            return_dict      = True,
+            output_hidden_states = True,      # ensures .hidden_states is present
+        )
 
-        logits_last = model.lm_head(hidden_all)                 # or _get_proj(model)(hidden_all)
-        logp_all    = F.log_softmax(logits_last[:, -1, :], dim=-1)
+        if hasattr(out, "last_hidden_state") and out.last_hidden_state is not None:
+            last_hidden = out.last_hidden_state                         # [B, L, H]
+        elif getattr(out, "hidden_states", None) is not None:
+            last_hidden = out.hidden_states[-1]                         # [B, L, H]
+        else:
+            raise ValueError(
+                "Model output has neither `last_hidden_state` nor `hidden_states`. "
+                "Enable `output_hidden_states=True` when calling the model."
+        )
+
+        # --- freeze prompt, leave grad on the final position -----------------------
+        hidden_all = last_hidden.detach().clone()       # no grad anywhere
+        hidden_all[:, -1, :] = last_hidden[:, -1, :]     # restore grad on last token
+
+        # --- logits & log-probs -----------------------------------------------------
+        proj        = self._get_proj(model)              # model-agnostic projection
+        logits_all  = proj(hidden_all)                   # [B, L, |V|]
+        logp_all    = F.log_softmax(logits_all[:, -1, :], dim=-1)  # [B, |V|]
 
 
 
