@@ -39,6 +39,7 @@ def load_imports():
         from torch.utils.data import default_collate
         import torch.nn.functional as F
         from torch.nn.utils.rnn import pad_sequence
+        import os
 
         os.environ["UNSLOTH_DISABLE_COMPILATION"]     = "1"   # no Triton kernels
         os.environ["UNSLOTH_DISABLE_GRADIENT_OFFLOAD"] = "1"  # keep grads on GPU
