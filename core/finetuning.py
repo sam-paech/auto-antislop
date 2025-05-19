@@ -373,11 +373,22 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    from transformers import BitsAndBytesConfig
+    import torch
+
+    bnb_cfg = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.bfloat16,   # keep bf16 math
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+    )
+
     # model (bf16, Flash-Attn disabled)
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        torch_dtype=torch.bfloat16,           # Qwen2 was trained in bf16
-        #attn_implementation="eager",          # avoids flash-attention kernels
+        #torch_dtype=torch.bfloat16,           # Qwen2 was trained in bf16
+        quantization_config=bnb_cfg,
+        attn_implementation="eager",          # avoids flash-attention kernels
         device_map={"": 0},                   # whole model on GPU-0
     )
     model.train()
