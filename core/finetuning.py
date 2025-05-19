@@ -446,6 +446,11 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 torch.arange(ids.size(0), device=ids.device), first
             ]
 
+        empty = ~batch["chosen_mask"].any(dim=1)
+        if empty.any():
+            print("found", empty.sum().item(), "empty examples in batch")
+
+
         logits = model(ids, attention_mask=attn, use_cache=False).logits[:, -1, :]
         loss   = torch.nn.functional.cross_entropy(logits, target)
 
