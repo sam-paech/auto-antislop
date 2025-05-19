@@ -28,20 +28,20 @@ logger = logging.getLogger(__name__)
 def load_imports():
     # --- Attempt to import Unsloth and related libraries only when this function is called ---
     try:
-        from unsloth import FastLanguageModel
+        #from unsloth import FastLanguageModel
         from transformers import AutoTokenizer, TextStreamer # Added TextStreamer for potential inference example
         from transformers import AutoModelForCausalLM
         from peft import PeftModel
         from trl import DPOTrainer, DPOConfig
         from datasets import load_dataset
-        from unsloth.chat_templates import get_chat_template
+        #from unsloth.chat_templates import get_chat_template
         import torch
         from torch.utils.data import default_collate
         import torch.nn.functional as F
         from torch.nn.utils.rnn import pad_sequence
 
         # Make all imports available in the global scope
-        globals()['FastLanguageModel'] = FastLanguageModel
+        #globals()['FastLanguageModel'] = FastLanguageModel
         globals()['AutoTokenizer'] = AutoTokenizer
         globals()['TextStreamer'] = TextStreamer
         globals()['AutoModelForCausalLM'] = AutoModelForCausalLM
@@ -49,7 +49,7 @@ def load_imports():
         globals()['DPOTrainer'] = DPOTrainer
         globals()['DPOConfig'] = DPOConfig
         globals()['load_dataset'] = load_dataset
-        globals()['get_chat_template'] = get_chat_template
+        #globals()['get_chat_template'] = get_chat_template
         globals()['torch'] = torch
         globals()['default_collate'] = default_collate
         globals()['F'] = F
@@ -354,6 +354,110 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     else:
         logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'tdpo'.")
         return
+    
+
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+    from torch.utils.data import DataLoader
+    from torch.nn.utils.rnn import pad_sequence
+    import torch
+
+    model_name   = config['finetune_base_model_id']
+    max_seq_len  = config['finetune_max_seq_length']
+    batch_size   = 4
+    steps        = 10
+    lr           = 1e-5
+
+    # tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    # model (bf16, Flash-Attn disabled)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype=torch.bfloat16,           # Qwen2 was trained in bf16
+        attn_implementation="eager",          # avoids flash-attention kernels
+        device_map={"": 0},                   # whole model on GPU-0
+    )
+    model.train()
+
+    # collator that handles TDPO-single and TDPO-multi
+    def collate_simple(samples):
+        pad_id = tokenizer.pad_token_id
+        B      = len(samples)
+
+        # prompt -> [B, L] left-padded
+        prompt = torch.full((B, max_seq_len), pad_id, dtype=torch.long)
+        attn   = torch.zeros_like(prompt, dtype=torch.bool)
+        for i, s in enumerate(samples):
+            ids = torch.tensor(s["prompt_ids"], dtype=torch.long)[-max_seq_len:]
+            prompt[i, -ids.size(0):] = ids
+            attn  [i, -ids.size(0):] = 1
+
+        batch = {"prompt_ids": prompt, "attention_mask": attn}
+
+        if "chosen_ids" in samples[0]:               # TDPO-multi
+            C = max(len(s["chosen_ids"]) for s in samples)
+            mat  = torch.full((B, C), -100, dtype=torch.long)
+            mask = torch.zeros_like(mat, dtype=torch.bool)
+            for i, s in enumerate(samples):
+                cids = torch.tensor(s["chosen_ids"], dtype=torch.long)
+                mat [i, :cids.size(0)] = cids
+                mask[i, :cids.size(0)] = 1
+            batch.update(chosen_ids=mat, chosen_mask=mask)
+        else:                                        # TDPO-single
+            batch["chosen_token_id"] = torch.tensor(
+                [s["chosen_token_id"] for s in samples]
+            )
+        return batch
+
+    loader = DataLoader(
+        dpo_dataset_hf,
+        batch_size=batch_size,
+        shuffle=True,
+        drop_last=True,
+        collate_fn=collate_simple,
+    )
+
+    optim = torch.optim.AdamW(model.parameters(), lr=lr)
+
+    for step, batch in zip(range(steps), loader):
+        batch = {k: v.to(model.device) for k, v in batch.items()}
+        ids, attn = batch["prompt_ids"], batch["attention_mask"]
+
+        # pick one chosen token per example
+        if "chosen_token_id" in batch:               # TDPO-single
+            target = batch["chosen_token_id"]
+        else:                                        # TDPO-multi
+            first  = batch["chosen_mask"].float().argmax(1)
+            target = batch["chosen_ids"][
+                torch.arange(ids.size(0), device=ids.device), first
+            ]
+
+        logits = model(ids, attention_mask=attn, use_cache=False).logits[:, -1, :]
+        loss   = torch.nn.functional.cross_entropy(logits, target)
+
+        if not torch.isfinite(loss):
+            print(f"‼ non-finite loss at step {step}: {loss.item()}")
+            break
+
+        optim.zero_grad()
+        loss.backward()
+
+        for n, p in model.named_parameters():
+            if p.grad is not None and not torch.isfinite(p.grad).all():
+                print(f"‼ non-finite grad in {n} (step {step})")
+                raise RuntimeError("NaN/Inf gradient detected")
+
+        optim.step()
+        print(f"step {step:02d}  loss={loss.item():.6f}")
+
+
+
+
+
+
+        
 
     import torch
     
@@ -369,16 +473,6 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         logger.error(f"Failed to load base model '{model_name}' or tokenizer for DPO: {e}", exc_info=True)
         return
     
-
-
-    locs = {}
-    for n, p in model.named_parameters():
-        locs.setdefault(p.device.type, 0)
-        locs[p.device.type] += 1
-    print(locs)                              # e.g. {'cpu': 82, 'cuda': 0}
-    print("first param device:", next(model.parameters()).device)
-        
-
 
     
     # Hard-disable gradient-checkpointing for TDPO
@@ -447,24 +541,6 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     #model.config._attn_implementation = "sdpa"
 
-    # after FastLanguageModel.get_peft_model(...)
-    for n, p in model.named_parameters():
-        if p.requires_grad:           # all lora_A / lora_B params
-            p.data = p.data.float()   # 32-bit weights
-            p.grad = None             # just in case something lingered
-
-
-    import types, torch
-    from peft.tuners.lora import LoraLayer          # always present
-
-    def _fp32_forward(self, x):
-        # x is already bf16/fp16 – promote inside
-        return self.__orig_forward(x.float()).to(x.dtype)
-
-    for m in model.modules():
-        if isinstance(m, LoraLayer):
-            m.__orig_forward = m.forward
-            m.forward = types.MethodType(_fp32_forward, m)
 
 
 
