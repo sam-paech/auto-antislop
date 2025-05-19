@@ -361,7 +361,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     from torch.nn.utils.rnn import pad_sequence
     from torch.utils.data import DataLoader
     import torch
-    from bitsandbytes.optim import PagedAdamW32bit
+    from bitsandbytes.optim import PagedAdamW32bit, PagedAdamW
     import bitsandbytes as bnb
     from transformers import BitsAndBytesConfig
 
@@ -453,7 +453,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     )
 
     # ── 32-bit optimiser over 4-bit weights (fixes NaN after first update) ──────
-    optim = PagedAdamW32bit(model.parameters(), lr=lr)
+    optim = PagedAdamW(model.parameters(), lr=lr)
 
     # ── training loop (gradient clip + NaN checks) ──────────────────────────────
     for step, batch in zip(range(steps), loader):
