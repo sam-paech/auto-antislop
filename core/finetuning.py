@@ -439,7 +439,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 bad = grad[~torch.isfinite(grad)]
                 print(f"⚠️  NaN/Inf in grad of {pname} "
                     f"(min={bad.min().item()}, max={bad.max().item()})")
-                raise RuntimeError("non-finite gradient")     # abort fast
+                #raise RuntimeError("non-finite gradient")     # abort fast
         for n, p in m.named_parameters():
             if p.requires_grad:
                 p.register_hook(lambda g, n=n: _hook(g, n))
