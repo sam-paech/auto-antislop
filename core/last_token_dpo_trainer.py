@@ -123,7 +123,7 @@ class LastTokenDPOTrainer(DPOTrainer):
 
 
         if inputs.get("chosen_ids") is not None:
-            DEBUG = True  
+            DEBUG = False  
             # --- unpack ----------------------------------------------------------------
             ch_ids  = inputs["chosen_ids"].to(model.device)       # [B,C]
             ch_mask = inputs["chosen_mask"].to(model.device)      # [B,C] bool
