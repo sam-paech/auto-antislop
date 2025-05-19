@@ -364,7 +364,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     model_name   = config['finetune_base_model_id']
     max_seq_len  = config['finetune_max_seq_length']
-    batch_size   = 1
+    batch_size   = 2
     steps        = 100
     lr           = 1e-5
 
@@ -403,7 +403,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             if p.requires_grad:
                 p.register_hook(lambda g, n=n: _hook(g, n))
     add_nan_hooks(model)
-    
+
     model.train()
 
     # collator that handles TDPO-single and TDPO-multi
