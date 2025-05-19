@@ -364,7 +364,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     model_name   = config['finetune_base_model_id']
     max_seq_len  = config['finetune_max_seq_length']
-    batch_size   = 2
+    batch_size   = 1
     steps        = 100
     lr           = 1e-5
 
@@ -386,8 +386,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     # model (bf16, Flash-Attn disabled)
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        torch_dtype=torch.bfloat16,           # Qwen2 was trained in bf16
-        #quantization_config=bnb_cfg,
+        #torch_dtype=torch.bfloat16,           # Qwen2 was trained in bf16
+        quantization_config=bnb_cfg,
         #attn_implementation="eager",          # avoids flash-attention kernels
         device_map={"": 0},                   # whole model on GPU-0
     )
