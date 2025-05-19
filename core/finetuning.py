@@ -370,7 +370,6 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             max_seq_length=max_seq_length,
             load_in_4bit=config['finetune_load_in_4bit'],
             dtype=torch.bfloat16 if (not config['finetune_load_in_4bit']) and torch.cuda.is_bf16_supported() else None,
-            compile_model      = False,
         )
         
     except Exception as e:
@@ -673,41 +672,6 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             max_grad_norm=0.5, # be nice to the baseline model
         ),
     )
-
-
-    # -----------------------------------------------------------
-    # after you create dpo_trainer  (just before .train())
-    # -----------------------------------------------------------
-    from bitsandbytes.optim import PagedAdamW32bit
-    from transformers.trainer_callback import TrainerCallback
-    import torch
-
-    # 1) build the optimiser on the trainable parameters only
-    optim = PagedAdamW32bit(
-        (p for p in dpo_trainer.model.parameters() if p.requires_grad),
-        lr=config["finetune_learning_rate"],
-    )
-
-    # 2) inject it into the trainer / accelerator
-    dpo_trainer.optimizer = optim
-    dpo_trainer.accelerator.optimizer = optim   # keeps scheduler in sync
-
-    # 3) lightweight grad-norm clip each step
-    def _clip_before_step(trainer, args, state, control, **kw):
-        torch.nn.utils.clip_grad_norm_(trainer.model.parameters(), 1.0)
-
-    class GradClipCallback(TrainerCallback):
-        def on_step_end(self, args, state, control, **kwargs):
-            # kwargs always contains "model" when called from Trainer
-            torch.nn.utils.clip_grad_norm_(kwargs["model"].parameters(), 1.0)
-            return control                         # must return the control object
-
-    # after you build dpo_trainer and inject the optimiser
-    dpo_trainer.add_callback(GradClipCallback())
-
-    print("⇢  using optimiser:", optim.__class__.__name__)   # should say PagedAdamW32bit
-    # -----------------------------------------------------------
-
 
 
 
