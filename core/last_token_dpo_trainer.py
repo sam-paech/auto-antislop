@@ -92,7 +92,7 @@ class LastTokenDPOTrainer(DPOTrainer):
         beta = getattr(self, "beta", 0.1)           # reused everywhere
 
         #torch.autograd.set_detect_anomaly(True)
-        logits_last.retain_grad()
+        
 
         # ── unpack ---------------------------------------------------------
         ids      = inputs["prompt_ids"].to(model.device)       # [B,L]
@@ -122,6 +122,7 @@ class LastTokenDPOTrainer(DPOTrainer):
         logits_last  = proj(last_token)                                 # [B, V]
         logp_all     = F.log_softmax(logits_last, dim=-1)               # [B, V]
 
+        logits_last.retain_grad()
         if return_outputs:
             loss.backward(retain_graph=True)            # probe pass
             g = logits_last.grad
