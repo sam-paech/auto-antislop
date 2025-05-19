@@ -355,7 +355,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'tdpo'.")
         return
 
-
+    import torch
     
     try:
         model, _ = FastLanguageModel.from_pretrained(
@@ -448,7 +448,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     #model.config._attn_implementation = "sdpa"
 
     from peft.tuners.lora import Linear4bitLt, LoraLayer
-    import torch
+    
 
     for m in model.modules():
         if isinstance(m, (LoraLayer, Linear4bitLt)):
