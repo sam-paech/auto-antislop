@@ -479,7 +479,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         optim.zero_grad()
         loss.backward()
 
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
         optim.step()
         print(f"step {step:02d}  loss={loss.item():.6f}")
