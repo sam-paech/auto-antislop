@@ -382,7 +382,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         bnb_4bit_compute_dtype=torch.bfloat16,   # bf16 matmuls
         bnb_4bit_quant_type="nf4",
         bnb_4bit_use_double_quant=True,
-        skip_modules=["lm_head"],               # keep lm_head full-precision
+        #skip_modules=["lm_head"],               # keep lm_head full-precision
     )
 
     model = AutoModelForCausalLM.from_pretrained(
