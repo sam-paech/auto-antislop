@@ -355,140 +355,6 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'tdpo'.")
         return
     
-
-    #from transformers import AutoTokenizer, AutoModelForCausalLM
-    
-    from torch.nn.utils.rnn import pad_sequence
-    from torch.utils.data import DataLoader
-    import torch
-    from bitsandbytes.optim import PagedAdamW32bit, PagedAdamW
-    import bitsandbytes as bnb
-    from transformers import BitsAndBytesConfig
-
-    model_name   = config['finetune_base_model_id']
-    max_seq_len  = config['finetune_max_seq_length']
-    batch_size   = 1
-    steps        = 100
-    lr           = 1e-5
-
-    # ── tokenizer ───────────────────────────────────────────────────────────────
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    # ── 4-bit quant, but bf16 compute; skip lm_head to stay bf16 in output proj ─
-    bnb_cfg = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,   # bf16 matmuls
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_use_double_quant=True,
-        #skip_modules=["lm_head"],               # keep lm_head full-precision
-    )
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        quantization_config=bnb_cfg,
-        device_map={"": 0},                     # single GPU
-        #attn_implementation="eager",            # no flash-attn kernels
-    )
-    model.train()
-
-    # ── optional: backward hook on Linear4bit (will trigger *before* NaN loss) ──
-    def hook_4b_grad(module, grad_in, grad_out):
-        if not torch.isfinite(grad_out[0]).all():
-            print(f"‼ NaN/Inf from {module.__class__.__name__} "
-                f"({module.out_features}×{module.in_features})")
-            raise RuntimeError("4-bit kernel produced non-finite grad")
-
-    for mod in model.modules():
-        if isinstance(mod, bnb.nn.Linear4bit):
-            mod.register_full_backward_hook(hook_4b_grad)
-
-    # ── tiny diagnostic hook for any fp32/bf16 parameter ────────────────────────
-    def add_nan_hooks(m):
-        for n, p in m.named_parameters():
-            if p.requires_grad:
-                p.register_hook(
-                    lambda g, n=n: (
-                        print(f"⚠️  NaN/Inf in grad of {n}") 
-                        if not torch.isfinite(g).all() else None
-                    )
-                )
-    add_nan_hooks(model)
-
-    # ── DataLoader (same as before) ─────────────────────────────────────────────
-    def collate_simple(samples):
-        pad_id = tokenizer.pad_token_id
-        B      = len(samples)
-        prompt = torch.full((B, max_seq_len), pad_id, dtype=torch.long)
-        attn   = torch.zeros_like(prompt, dtype=torch.bool)
-        for i, s in enumerate(samples):
-            ids = torch.tensor(s["prompt_ids"], dtype=torch.long)[-max_seq_len:]
-            prompt[i, -ids.size(0):] = ids
-            attn  [i, -ids.size(0):] = 1
-
-        batch = {"prompt_ids": prompt, "attention_mask": attn}
-
-        if "chosen_ids" in samples[0]:                       # TDPO-multi
-            C = max(len(s["chosen_ids"]) for s in samples)
-            mat  = torch.full((B, C), -100, dtype=torch.long)
-            mask = torch.zeros_like(mat, dtype=torch.bool)
-            for i, s in enumerate(samples):
-                cids = torch.tensor(s["chosen_ids"], dtype=torch.long)
-                mat [i, :cids.size(0)] = cids
-                mask[i, :cids.size(0)] = 1
-            batch.update(chosen_ids=mat, chosen_mask=mask)
-        else:                                                # TDPO-single
-            batch["chosen_token_id"] = torch.tensor(
-                [s["chosen_token_id"] for s in samples]
-            )
-        return batch
-
-    loader = DataLoader(
-        dpo_dataset_hf,
-        batch_size=batch_size,
-        shuffle=True,
-        drop_last=True,
-        collate_fn=collate_simple,
-    )
-
-    # ── 32-bit optimiser over 4-bit weights (fixes NaN after first update) ──────
-    optim = torch.optim.AdamW(model.parameters(), lr=lr)
-
-    # ── training loop (gradient clip + NaN checks) ──────────────────────────────
-    for step, batch in zip(range(steps), loader):
-        batch = {k: v.to(model.device) for k, v in batch.items()}
-        ids, attn = batch["prompt_ids"], batch["attention_mask"]
-
-        if "chosen_token_id" in batch:                       # TDPO-single
-            target = batch["chosen_token_id"]
-        else:                                                # TDPO-multi
-            first  = batch["chosen_mask"].float().argmax(1)
-            target = batch["chosen_ids"][
-                torch.arange(ids.size(0), device=ids.device), first
-            ]
-
-        logits = model(ids, attention_mask=attn,
-                    use_cache=False).logits[:, -1, :]
-        loss   = torch.nn.functional.cross_entropy(logits, target)
-
-        if not torch.isfinite(loss):
-            print(f"‼ non-finite loss at step {step}: {loss.item()}")
-            break
-
-        optim.zero_grad()
-        loss.backward()
-
-        #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-        optim.step()
-        print(f"step {step:02d}  loss={loss.item():.6f}")
-
-
-
-
-
-
         
 
     import torch
@@ -785,7 +651,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             num_train_epochs=config['finetune_num_epochs'],
             learning_rate=config['finetune_learning_rate'],
             logging_steps=10,
-            optim="adamw_8bit",
+            optim="paged_adamw",
             seed=42,
             output_dir=str(finetune_output_dir),
             max_length=max_seq_length,
