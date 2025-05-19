@@ -389,7 +389,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         model_name,
         quantization_config=bnb_cfg,
         device_map={"": 0},                     # single GPU
-        attn_implementation="eager",            # no flash-attn kernels
+        #attn_implementation="eager",            # no flash-attn kernels
     )
     model.train()
 
