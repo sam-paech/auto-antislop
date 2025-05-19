@@ -453,7 +453,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     )
 
     # ── 32-bit optimiser over 4-bit weights (fixes NaN after first update) ──────
-    optim = PagedAdamW(model.parameters(), lr=lr)
+    optim = torch.optim.AdamW(model.parameters(), lr=lr)
 
     # ── training loop (gradient clip + NaN checks) ──────────────────────────────
     for step, batch in zip(range(steps), loader):
