@@ -290,13 +290,12 @@ class LastTokenDPOTrainer(DPOTrainer):
             return loss * 0      # blocks gradient update for this batch
         # -----------------------------------------------------------------------
 
-        logits_last.retain_grad()
-        #if return_outputs:
-        loss.backward(retain_graph=True)            # probe pass
-        g = logits_last.grad
-        print(f"∂L/∂logits  finite={torch.isfinite(g).all()}  "
-            f"max|g|={g.abs().max().item():.4e}")
-        #return loss, metrics
+        #logits_last.retain_grad()
+        #loss.backward(retain_graph=True)            # probe pass
+        #g = logits_last.grad
+        #print(f"∂L/∂logits  finite={torch.isfinite(g).all()}  "
+        #    f"max|g|={g.abs().max().item():.4e}")
+        
 
         if return_outputs:
             return loss, metrics
