@@ -117,12 +117,11 @@ extra_slop_phrases_to_ban: [
 # User-supplied regex patterns to ban
 extra_regex_patterns: [
     # These ones ban "it's not x, it's y" type patterns:
-    "\\bnot\\s+(?:just|only|merely)?\\s*(?:[^\\s]+\\s*){1,6}?[,;:—–-]?\\s*but\\s+(?:also\\s+)?",
-    "\\bnot\\s+only\\s+(?:[^\\s]+\\s*){1,6}?[,;:—–-]?\\s*but\\s+also\\s+",
-    "\\bit'?s\\s+not\\s+(?:just|only|merely)?\\s*(?:[^\\s]+\\s*){1,6}?[,;:—–-]\\s*it'?s\\s+",
-    "\\b(?:[^\\s]+\\s*){1,4}?is\\s+not\\s+(?:just\\s+|only\\s+)?(?:about\\s+)?(?:[^\\s]+\\s*){1,6}?[,;:—–-]\\s*it'?s\\s+(?:about\\s+)?"
+    "\\bnot\\s+(?:just|only|merely)?\\s*(?:(?!but\\b|[.?!]).){1,50}?[,;:—–-]?\\s*but\\s+(?:also\\s+)?",
+    "\\bnot\\s+only\\s+(?:(?!but\\b|[.?!]).){1,50}?[,;:—–-]?\\s*but\\s+also\\s+",
+    "\\bit'?s\\s+not\\s+(?:just|only|merely)?\\s*(?:(?!it'?s\\b|[.?!]).){1,50}?[,;:—–-]\\s*it'?s\\s+",
+    "\\b(?:(?!is\\b|[.?!]).){1,50}?is\\s+not\\s+(?:just\\s+|only\\s+)?(?:about\\s+)?(?:(?!it'?s\\b|[.?!]).){1,50}?[,;:—–-]\\s*it'?s\\s+(?:about\\s+)?"
 ]
-  
 
 # --- Metrics ---
 min_word_len_for_analysis: 3 # For n-gram analysis and lexical diversity
