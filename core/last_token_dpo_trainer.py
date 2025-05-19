@@ -91,6 +91,8 @@ class LastTokenDPOTrainer(DPOTrainer):
         eps  = getattr(self, "clip_eps", 0.2)       # only used in "clip"
         beta = getattr(self, "beta", 0.1)           # reused everywhere
 
+        torch.autograd.set_detect_anomaly(True)
+
         # ── unpack ---------------------------------------------------------
         ids      = inputs["prompt_ids"].to(model.device)       # [B,L]
         attn     = inputs["attention_mask"].to(model.device)   # [B,L]
@@ -122,7 +124,7 @@ class LastTokenDPOTrainer(DPOTrainer):
 
 
         if inputs.get("chosen_ids") is not None:
-            DEBUG = True  
+            DEBUG = False  
             EPS_P   = 1e-12        # clamp floor for probabilities
             # --- unpack ----------------------------------------------------------------
             ch_ids  = inputs["chosen_ids"].to(model.device)       # [B,C]
