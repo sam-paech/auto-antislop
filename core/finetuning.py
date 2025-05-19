@@ -377,7 +377,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype=torch.bfloat16,           # Qwen2 was trained in bf16
-        attn_implementation="eager",          # avoids flash-attention kernels
+        #attn_implementation="eager",          # avoids flash-attention kernels
         device_map={"": 0},                   # whole model on GPU-0
     )
     model.train()
