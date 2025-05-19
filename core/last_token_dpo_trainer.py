@@ -119,10 +119,6 @@ class LastTokenDPOTrainer(DPOTrainer):
         logits_last  = proj(last_token)                                 # [B, V]
         logp_all     = F.log_softmax(logits_last, dim=-1)               # [B, V]
 
-        if torch.isnan(last_hidden).any():       print("NaN in hidden")
-        if torch.isnan(logits_last).any():       print("NaN in logits")
-        if torch.isnan(logp_all).any():          print("NaN in log‑p table")
-
 
 
         if inputs.get("chosen_ids") is not None:
@@ -269,6 +265,26 @@ class LastTokenDPOTrainer(DPOTrainer):
         #with torch.no_grad():
         #    hist = ratio.cpu().log10().numpy()
         #    print("log10 ratio stats:", hist.min(), hist.mean(), hist.max())
+
+
+        def _chk(name, t):
+            if not torch.isfinite(t).all():
+                bad = t[~torch.isfinite(t)]
+                print(f"⚠️  {name} has {bad.numel()} non-finite values "
+                    f"(min={bad.min().item()}, max={bad.max().item()})")
+
+        _chk("logp_good",   logp_good)
+        _chk("logp_bad",    logp_bad)
+        _chk("delta",       delta)
+        _chk("ratio",       ratio if 'ratio' in locals() else torch.tensor(0.))
+        _chk("pref_loss",   pref_loss)
+        _chk("total_loss",  loss)
+
+        # -----------------------------------------------------------------------
+        if not torch.isfinite(loss):
+            print("non-finite loss detected – skipping backward")
+            return loss * 0      # blocks gradient update for this batch
+        # -----------------------------------------------------------------------
 
         if return_outputs:
             return loss, metrics
