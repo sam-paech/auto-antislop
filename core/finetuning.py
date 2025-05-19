@@ -603,16 +603,38 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
 
     # --- derive LR automatically --------------------------------------------    
+    # choose the point where you want stronger fall-off
+    N_SWITCH = 5_000          # 5 k examples
+    LR_SCALE_CONST = 0.15
+
     if config.get("finetune_auto_learning_rate", False):
         N      = len(dpo_dataset_hf)
         B_eff  = config["finetune_batch_size"] * config["finetune_gradient_accumulation_steps"]
         rank   = config["finetune_lora_r"]
 
-        eta0   = 2e-4
-        LR_SCALE_CONST = 0.2
-        lr     = eta0 * (B_eff / 256) ** 0.5 * (rank / 8) ** 0.5 * (1e4 / N) ** 0.5 * LR_SCALE_CONST
+        eta0   = 2e-4        
+
+        if N <= N_SWITCH:
+            # keep your original √-decay (α = 0.5)
+            lr = (eta0
+                * (B_eff / 256) ** 0.5
+                * (rank  /   8) ** 0.5
+                * (1e4  /    N) ** 0.5
+                * LR_SCALE_CONST)
+        else:
+            # lock in the value reached at N_SWITCH, then apply a 1/N tail (α = 1.0)
+            lr = (
+                eta0
+                * (B_eff / 256) ** 0.5
+                * (rank / 8) ** 0.5
+                * (1e4 / N_SWITCH) ** 0.5   # freeze √-decay at 5 k
+                * (N_SWITCH / N)            # linear tail beyond 5 k
+                * LR_SCALE_CONST
+            )
+
         config["finetune_learning_rate"] = lr
-        print(f"Auto-scaled LR = {lr:.3e}")
+        print(f"Auto-scaled LR (N={N}) = {lr:.3e}")
+
 
 
     TrainerClass = LastTokenDPOTrainer if mode.lower() in ["tdpo", "tdpo-multi"] else DPOTrainer
