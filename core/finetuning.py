@@ -428,12 +428,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         lr = config["finetune_learning_rate"],
     )
 
-    # gradient-clip each step
-    class GradClipCb(TrainerCallback):
-        def on_step_end(self, args, state, control, **kw):
-            torch.nn.utils.clip_grad_norm_(kw["model"].parameters(), 1.0)
-            return control
-        
+    
 
 
 
@@ -736,7 +731,16 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     )
 
     dpo_trainer.optimizer = optim
-    dpo_trainer.add_callback(GradClipCb())
+
+    CLIP_GRADS = False
+    # gradient-clip each step
+    class GradClipCb(TrainerCallback):
+        def on_step_end(self, args, state, control, **kw):
+            torch.nn.utils.clip_grad_norm_(kw["model"].parameters(), 1.0)
+            return control
+        
+    if CLIP_GRADS: # can help if running into model collapse, but will slow training
+        dpo_trainer.add_callback(GradClipCb())
 
 
     logger.info(f"Starting training. Output will be in {finetune_output_dir}. Check tensorboard for progress.")
