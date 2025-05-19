@@ -91,9 +91,6 @@ class LastTokenDPOTrainer(DPOTrainer):
         eps  = getattr(self, "clip_eps", 0.2)       # only used in "clip"
         beta = getattr(self, "beta", 0.1)           # reused everywhere
 
-        #torch.autograd.set_detect_anomaly(True)
-        
-
         # ── unpack ---------------------------------------------------------
         ids      = inputs["prompt_ids"].to(model.device)       # [B,L]
         attn     = inputs["attention_mask"].to(model.device)   # [B,L]
@@ -122,30 +119,28 @@ class LastTokenDPOTrainer(DPOTrainer):
         logits_last  = proj(last_token)                                 # [B, V]
         logp_all     = F.log_softmax(logits_last, dim=-1)               # [B, V]
 
-        
+
 
 
         if inputs.get("chosen_ids") is not None:
-            DEBUG = False  
-            EPS_P   = 1e-12        # clamp floor for probabilities
+            DEBUG = True  
             # --- unpack ----------------------------------------------------------------
             ch_ids  = inputs["chosen_ids"].to(model.device)       # [B,C]
             ch_mask = inputs["chosen_mask"].to(model.device)      # [B,C] bool
             rej     = inputs["rejected_token_id"].to(model.device)  # [B]
 
             # --- per-token log-p and p --------------------------------------------------
-            gathered = logp_all.gather(-1, ch_ids)                # log p_i            
-            probs    = gathered.exp()
+            gathered = logp_all.gather(-1, ch_ids)                # log p_i
+            probs    = gathered.exp()                             # p_i
 
             # --- soft weight: 1 at p≤eps, linear decay to 0 at p≥1 ----------------------
             weights  = torch.clamp((eps - probs) / eps, min=0.0) * ch_mask
             zero_row = weights.sum(dim=-1, keepdim=True) < 1e-12  # all weights zero?
             weights  = torch.where(zero_row, ch_mask.float(), weights)
 
-            weights_sum        = weights.sum(dim=-1, keepdim=True)
+            weights_sum        = weights.sum(dim=-1, keepdim=True)         # [B,1]
             weighted_mean_prob = (probs * weights).sum(dim=-1, keepdim=True) / weights_sum
-            weighted_mean_prob = weighted_mean_prob.clamp_min(EPS_P)          # NEW
-            logp_good          = weighted_mean_prob.log().squeeze(-1)
+            logp_good          = weighted_mean_prob.log().squeeze(-1)      # [B]
 
             # --- rejected token ---------------------------------------------------------
             logp_bad = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)  # [B]
@@ -241,17 +236,14 @@ class LastTokenDPOTrainer(DPOTrainer):
 
         elif mode == "clip":
             # PPO-style odds-ratio clipping
-            delta  = (logp_good - logp_bad).clamp(min=-80.0, max=80.0)   # log-odds
+            delta  = logp_good - logp_bad                 # log-odds
             ratio  = torch.exp(delta)                     # odds ratio
-            #clipped = torch.minimum(ratio, torch.tensor(1.0 + eps, device=ratio.device))
-            #pref_loss = -torch.log(clipped / (1.0 + eps)).mean()
-            MIN_R  = 1e-6
-            clipped = torch.clamp(ratio, min=MIN_R, max=1.0 + eps)
+            clipped = torch.minimum(ratio, torch.tensor(1.0 + eps, device=ratio.device))
             pref_loss = -torch.log(clipped / (1.0 + eps)).mean()
             kl_loss   = 0.0
 
         else:  # "free"
-            delta  = (logp_good - logp_bad).clamp(min=-80.0, max=80.0)
+            delta = logp_good - logp_bad
             pref_loss = -F.logsigmoid(beta * delta).mean()
             kl_loss   = 0.0
 
@@ -270,59 +262,11 @@ class LastTokenDPOTrainer(DPOTrainer):
         #    hist = ratio.cpu().log10().numpy()
         #    print("log10 ratio stats:", hist.min(), hist.mean(), hist.max())
 
-
-        def _chk(name, t):
-            if not torch.isfinite(t).all():
-                bad = t[~torch.isfinite(t)]
-                print(f"⚠️  {name} has {bad.numel()} non-finite values "
-                    f"(min={bad.min().item()}, max={bad.max().item()})")
-
-        _chk("logp_good",   logp_good)
-        _chk("logp_bad",    logp_bad)
-        _chk("delta",       delta)
-        _chk("ratio",       ratio if 'ratio' in locals() else torch.tensor(0.))
-        _chk("pref_loss",   pref_loss)
-        _chk("total_loss",  loss)
-
-        # -----------------------------------------------------------------------
-        if not torch.isfinite(loss):
-            print("non-finite loss detected – skipping backward")
-            return loss * 0      # blocks gradient update for this batch
-        # -----------------------------------------------------------------------
-
-        #logits_last.retain_grad()
-        #loss.backward(retain_graph=True)            # probe pass
-        #g = logits_last.grad
-        #print(f"∂L/∂logits  finite={torch.isfinite(g).all()}  "
-        #    f"max|g|={g.abs().max().item():.4e}")
-        
-
         if return_outputs:
             return loss, metrics
         return loss
 
-    def _compute_loss(self, model, inputs, return_outputs=False, **_):
-        ids   = inputs["prompt_ids"].to(model.device)          # [B,L]
-        attn  = inputs["attention_mask"].to(model.device)      # [B,L]
-        chmat = inputs["chosen_ids"].to(model.device)          # [B,C]
-        mask  = inputs["chosen_mask"].to(model.device)         # [B,C]
 
-        # pick the first valid column in each row
-        first_idx = mask.float().argmax(dim=1)                 # [B]
-        label = chmat[torch.arange(chmat.size(0), device=chmat.device),
-                      first_idx]                               # [B]
-
-        out = model(ids, attention_mask=attn,
-                    use_cache=False, return_dict=True)
-        logits_last = out.logits[:, -1, :]                     # [B,V]
-        #with torch.cuda.amp.autocast(enabled=False):
-        #    logits_last = proj(last_token.float())      # FP32 mm
-
-        loss = F.cross_entropy(logits_last, label)
-
-        if return_outputs:
-            return loss, {"nll": loss.detach()}
-        return loss
 
     # ----------------------------------------------------------
     def _prepare_dataset(self, dataset, *args, **_):
