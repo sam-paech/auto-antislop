@@ -302,15 +302,20 @@ class LastTokenDPOTrainer(DPOTrainer):
         return loss
 
     def compute_loss(self, model, inputs, return_outputs=False, **_):
-        ids   = inputs["prompt_ids"].to(model.device)        # [B,L]
-        attn  = inputs["attention_mask"].to(model.device)    # [B,L]
-        label = inputs["chosen_ids"][0].to(model.device)   # [B]
+        ids   = inputs["prompt_ids"].to(model.device)          # [B,L]
+        attn  = inputs["attention_mask"].to(model.device)      # [B,L]
+        chmat = inputs["chosen_ids"].to(model.device)          # [B,C]
+        mask  = inputs["chosen_mask"].to(model.device)         # [B,C]
+
+        # pick the first valid column in each row
+        first_idx = mask.float().argmax(dim=1)                 # [B]
+        label = chmat[torch.arange(chmat.size(0), device=chmat.device),
+                      first_idx]                               # [B]
 
         out = model(ids, attention_mask=attn,
                     use_cache=False, return_dict=True)
-        logits_last = out.logits[:, -1, :]                   # [B,V]
+        logits_last = out.logits[:, -1, :]                     # [B,V]
 
-        # standard cross-entropy on the final timestep
         loss = F.cross_entropy(logits_last, label)
 
         if return_outputs:
