@@ -447,6 +447,27 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     #model.config._attn_implementation = "sdpa"
 
+    # after FastLanguageModel.get_peft_model(...)
+    for n, p in model.named_parameters():
+        if p.requires_grad:           # all lora_A / lora_B params
+            p.data = p.data.float()   # 32-bit weights
+            p.grad = None             # just in case something lingered
+
+
+    import types, torch
+    from peft.tuners.lora import LoraLayer          # always present
+
+    def _fp32_forward(self, x):
+        # x is already bf16/fp16 – promote inside
+        return self.__orig_forward(x.float()).to(x.dtype)
+
+    for m in model.modules():
+        if isinstance(m, LoraLayer):
+            m.__orig_forward = m.forward
+            m.forward = types.MethodType(_fp32_forward, m)
+
+
+
     CALC_VAL_STATS = False
     if CALC_VAL_STATS:
         def _collate_tdpo(features, pad_id: int, max_len: int):

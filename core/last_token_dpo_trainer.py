@@ -315,6 +315,8 @@ class LastTokenDPOTrainer(DPOTrainer):
         out = model(ids, attention_mask=attn,
                     use_cache=False, return_dict=True)
         logits_last = out.logits[:, -1, :]                     # [B,V]
+        #with torch.cuda.amp.autocast(enabled=False):
+        #    logits_last = proj(last_token.float())      # FP32 mm
 
         loss = F.cross_entropy(logits_last, label)
 
