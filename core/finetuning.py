@@ -40,6 +40,10 @@ def load_imports():
         import torch.nn.functional as F
         from torch.nn.utils.rnn import pad_sequence
 
+        os.environ["UNSLOTH_DISABLE_COMPILATION"]     = "1"   # no Triton kernels
+        os.environ["UNSLOTH_DISABLE_GRADIENT_OFFLOAD"] = "1"  # keep grads on GPU
+
+
         # Make all imports available in the global scope
         globals()['FastLanguageModel'] = FastLanguageModel
         globals()['AutoTokenizer'] = AutoTokenizer
@@ -365,6 +369,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             max_seq_length=max_seq_length,
             load_in_4bit=config['finetune_load_in_4bit'],
             dtype=torch.bfloat16 if (not config['finetune_load_in_4bit']) and torch.cuda.is_bf16_supported() else None,
+            compile_model      = False,
         )
         
     except Exception as e:
