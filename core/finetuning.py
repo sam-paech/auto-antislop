@@ -447,6 +447,19 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     #model.config._attn_implementation = "sdpa"
 
+    from peft.tuners.lora import LoraLayer          # always exists
+    import types
+
+    def _fp32_forward(self, *args, **kwargs):
+        with torch.cuda.amp.autocast(enabled=False):
+            return self.__orig_forward(*args, **kwargs)
+
+    for m in model.modules():
+        if isinstance(m, LoraLayer):
+            m.__orig_forward = m.forward            # stash original
+            m.forward = types.MethodType(_fp32_forward, m)
+            
+
     CALC_VAL_STATS = False
     if CALC_VAL_STATS:
         def _collate_tdpo(features, pad_id: int, max_len: int):
