@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 import logging
 from pathlib import Path
 import os
+import math
 import json
 from utils.dataset_helpers import load_tdpo_dataset, load_tdpo_multi_dataset
 logger = logging.getLogger(__name__)
@@ -603,37 +604,41 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
 
     # --- derive LR automatically --------------------------------------------    
-    # choose the point where you want stronger fall-off
-    N_SWITCH = 5_000          # 5 k examples
-    LR_SCALE_CONST = 0.15
 
+    # ── learning‑rate schedule parameters ───────────────────────────────────
+    N_SWITCH = 5_000          # centre of transition (examples)
+    WIDTH    = 1_000          # half‑width of tanh ramp (examples)
+    LR_SCALE_CONST = 0.15
+    eta0     = 2e-4           # base LR before scaling
+
+    # ── auto‑scale LR ───────────────────────────────────────────────────────
     if config.get("finetune_auto_learning_rate", False):
         N      = len(dpo_dataset_hf)
         B_eff  = config["finetune_batch_size"] * config["finetune_gradient_accumulation_steps"]
         rank   = config["finetune_lora_r"]
 
-        eta0   = 2e-4        
+        # common pre‑factor
+        base = (
+            eta0
+            * (B_eff / 256) ** 0.5
+            * (rank  /   8) ** 0.5
+            * LR_SCALE_CONST
+        )
 
-        if N <= N_SWITCH:
-            # keep your original √-decay (α = 0.5)
-            lr = (eta0
-                * (B_eff / 256) ** 0.5
-                * (rank  /   8) ** 0.5
-                * (1e4  /    N) ** 0.5
-                * LR_SCALE_CONST)
-        else:
-            # lock in the value reached at N_SWITCH, then apply a 1/N tail (α = 1.0)
-            lr = (
-                eta0
-                * (B_eff / 256) ** 0.5
-                * (rank / 8) ** 0.5
-                * (1e4 / N_SWITCH) ** 0.5   # freeze √-decay at 5 k
-                * (N_SWITCH / N)            # linear tail beyond 5 k
-                * LR_SCALE_CONST
-            )
+        # square‑root branch (α = 0.5)
+        lr_small = base * (1e4 / N) ** 0.5
+
+        # linear tail anchored to value at N_SWITCH (α = 1.0 beyond switch)
+        anchor   = (1e4 / N_SWITCH) ** 0.5
+        lr_large = base * anchor * (N_SWITCH / N)
+
+        # smooth blend with tanh ramp
+        w  = 0.5 * (1 + math.tanh((N - N_SWITCH) / WIDTH))  # 0 → 1 over ~2*WIDTH
+        lr = (1 - w) * lr_small + w * lr_large
 
         config["finetune_learning_rate"] = lr
-        print(f"Auto-scaled LR (N={N}) = {lr:.3e}")
+        print(f"Auto‑scaled LR (N={N}, w={w:.3f}) = {lr:.3e}")
+
 
 
 
