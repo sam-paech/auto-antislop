@@ -2,14 +2,14 @@ from typing import TYPE_CHECKING
 
 # placeholders for later lazy loading
 if TYPE_CHECKING:
-    from unsloth import FastLanguageModel as FastLanguageModelType
-    from transformers import AutoTokenizer as AutoTokenizerType
-    from transformers import TextStreamer as TextStreamerType
-    from transformers import AutoModelForCausalLM as AutoModelForCausalLMType
-    from peft import PeftModel as PeftModelType
+    from unsloth import FastLanguageModel
+    from transformers import AutoTokenizer
+    from transformers import TextStreamer
+    from transformers import AutoModelForCausalLM
+    from peft import PeftModel
     from trl import DPOTrainer, DPOConfig
-    from datasets import Dataset as DatasetType
-    from unsloth.chat_templates import get_chat_template as get_chat_template_type
+    from datasets import Dataset
+    from unsloth.chat_templates import get_chat_template
     import torch # Keep torch as it might be used for GPU checks earlier if needed    
     # typing.Optional can be imported at the top level if used in type hints outside the function
     from torch.utils.data import default_collate
