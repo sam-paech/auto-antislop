@@ -41,8 +41,6 @@ def load_imports():
         from torch.nn.utils.rnn import pad_sequence
         import os
         import transformers
-        #from transformers.modeling_flash_attention_utils import _init_flash_attention_import
-        #_init_flash_attention_import() 
 
         # Make all imports available in the global scope
         #globals()['FastLanguageModel'] = FastLanguageModel
@@ -404,7 +402,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             device_map  = {"": 0},
         )
 
-    #model.config._attn_implementation = "eager"        # avoid flash-attn fp16 path
+    model.config._attn_implementation = "eager"        # avoid flash-attn fp16 path
     model.train()
 
     # 2. LoRA --------------------------------------------------------
