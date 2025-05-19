@@ -391,6 +391,19 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         #attn_implementation="eager",          # avoids flash-attention kernels
         device_map={"": 0},                   # whole model on GPU-0
     )
+
+    def add_nan_hooks(m):
+        def _hook(grad, pname):
+            if not torch.isfinite(grad).all():
+                bad = grad[~torch.isfinite(grad)]
+                print(f"⚠️  NaN/Inf in grad of {pname} "
+                    f"(min={bad.min().item()}, max={bad.max().item()})")
+                #raise RuntimeError("non-finite gradient")     # abort fast
+        for n, p in m.named_parameters():
+            if p.requires_grad:
+                p.register_hook(lambda g, n=n: _hook(g, n))
+    add_nan_hooks(model)
+    
     model.train()
 
     # collator that handles TDPO-single and TDPO-multi
@@ -544,17 +557,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             model.config.gradient_checkpointing = False
 
 
-    def add_nan_hooks(m):
-        def _hook(grad, pname):
-            if not torch.isfinite(grad).all():
-                bad = grad[~torch.isfinite(grad)]
-                print(f"⚠️  NaN/Inf in grad of {pname} "
-                    f"(min={bad.min().item()}, max={bad.max().item()})")
-                #raise RuntimeError("non-finite gradient")     # abort fast
-        for n, p in m.named_parameters():
-            if p.requires_grad:
-                p.register_hook(lambda g, n=n: _hook(g, n))
-    add_nan_hooks(model)
+    
 
     #model.config._attn_implementation = "sdpa"
 
