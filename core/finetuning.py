@@ -40,6 +40,9 @@ def load_imports():
         import torch.nn.functional as F
         from torch.nn.utils.rnn import pad_sequence
         import os
+        import transformers
+        from transformers.modeling_flash_attention_utils import _init_flash_attention_import
+        _init_flash_attention_import() 
 
         # Make all imports available in the global scope
         #globals()['FastLanguageModel'] = FastLanguageModel
