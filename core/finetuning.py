@@ -363,6 +363,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     import torch
     from bitsandbytes.optim import PagedAdamW32bit
     import bitsandbytes as bnb
+    from transformers import BitsAndBytesConfig
 
     model_name   = config['finetune_base_model_id']
     max_seq_len  = config['finetune_max_seq_length']
