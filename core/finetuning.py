@@ -382,7 +382,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     
     # Hard-disable gradient-checkpointing for TDPO
-    if mode == "tdpo":
+    if mode in ["tdpo", "tdpo-multi"]:
         model.config._attn_implementation = "flash_attention_2"
         # turn off every ckpt flag Unsloth uses
         if hasattr(model, "gradient_checkpointing_disable"):
@@ -421,7 +421,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         max_seq_length=max_seq_length,
     )
 
-    if mode == "tdpo":
+    if mode in ["tdpo", "tdpo-multi"]:
         model.config._attn_implementation = "flash_attention_2"
         # turn off every ckpt flag Unsloth uses
         if hasattr(model, "gradient_checkpointing_disable"):

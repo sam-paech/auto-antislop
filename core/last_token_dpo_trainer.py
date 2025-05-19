@@ -91,7 +91,8 @@ class LastTokenDPOTrainer(DPOTrainer):
         eps  = getattr(self, "clip_eps", 0.2)       # only used in "clip"
         beta = getattr(self, "beta", 0.1)           # reused everywhere
 
-        torch.autograd.set_detect_anomaly(True)
+        #torch.autograd.set_detect_anomaly(True)
+        logits_last.retain_grad()
 
         # ── unpack ---------------------------------------------------------
         ids      = inputs["prompt_ids"].to(model.device)       # [B,L]
@@ -121,6 +122,12 @@ class LastTokenDPOTrainer(DPOTrainer):
         logits_last  = proj(last_token)                                 # [B, V]
         logp_all     = F.log_softmax(logits_last, dim=-1)               # [B, V]
 
+        if return_outputs:
+            loss.backward(retain_graph=True)            # probe pass
+            g = logits_last.grad
+            print(f"∂L/∂logits  finite={torch.isfinite(g).all()}  "
+                f"max|g|={g.abs().max().item():.4e}")
+            return loss, metrics
 
 
         if inputs.get("chosen_ids") is not None:
