@@ -443,7 +443,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         for n, p in m.named_parameters():
             if p.requires_grad:
                 p.register_hook(lambda g, n=n: _hook(g, n))
-    add_nan_hooks(model)
+    #add_nan_hooks(model)
 
 
     CALC_VAL_STATS = False
