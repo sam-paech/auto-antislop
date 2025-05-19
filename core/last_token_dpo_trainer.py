@@ -119,6 +119,9 @@ class LastTokenDPOTrainer(DPOTrainer):
         logits_last  = proj(last_token)                                 # [B, V]
         logp_all     = F.log_softmax(logits_last, dim=-1)               # [B, V]
 
+        if torch.isnan(last_hidden).any():       print("NaN in hidden")
+        if torch.isnan(logits_last).any():       print("NaN in logits")
+        if torch.isnan(logp_all).any():          print("NaN in log‑p table")
 
 
 
