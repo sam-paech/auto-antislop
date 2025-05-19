@@ -28,20 +28,20 @@ logger = logging.getLogger(__name__)
 def load_imports():
     # --- Attempt to import Unsloth and related libraries only when this function is called ---
     try:
-        #from unsloth import FastLanguageModel
+        from unsloth import FastLanguageModel
         from transformers import AutoTokenizer, TextStreamer # Added TextStreamer for potential inference example
         from transformers import AutoModelForCausalLM
         from peft import PeftModel
         from trl import DPOTrainer, DPOConfig
         from datasets import load_dataset
-        #from unsloth.chat_templates import get_chat_template
+        from unsloth.chat_templates import get_chat_template
         import torch
         from torch.utils.data import default_collate
         import torch.nn.functional as F
         from torch.nn.utils.rnn import pad_sequence
 
         # Make all imports available in the global scope
-        #globals()['FastLanguageModel'] = FastLanguageModel
+        globals()['FastLanguageModel'] = FastLanguageModel
         globals()['AutoTokenizer'] = AutoTokenizer
         globals()['TextStreamer'] = TextStreamer
         globals()['AutoModelForCausalLM'] = AutoModelForCausalLM
@@ -49,7 +49,7 @@ def load_imports():
         globals()['DPOTrainer'] = DPOTrainer
         globals()['DPOConfig'] = DPOConfig
         globals()['load_dataset'] = load_dataset
-        #globals()['get_chat_template'] = get_chat_template
+        globals()['get_chat_template'] = get_chat_template
         globals()['torch'] = torch
         globals()['default_collate'] = default_collate
         globals()['F'] = F
