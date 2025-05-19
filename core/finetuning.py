@@ -673,6 +673,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     # after you create dpo_trainer  (just before .train())
     # -----------------------------------------------------------
     from bitsandbytes.optim import PagedAdamW32bit
+    from transformers.trainer_callback import TrainerCallback
     import torch
 
     # 1) build the optimiser on the trainable parameters only
@@ -689,9 +690,14 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     def _clip_before_step(trainer, args, state, control, **kw):
         torch.nn.utils.clip_grad_norm_(trainer.model.parameters(), 1.0)
 
-    dpo_trainer.add_callback(
-        type("GradClip", (), {"on_step_end": _clip_before_step})()
-    )
+    class GradClipCallback(TrainerCallback):
+        def on_step_end(self, args, state, control, **kwargs):
+            # kwargs always contains "model" when called from Trainer
+            torch.nn.utils.clip_grad_norm_(kwargs["model"].parameters(), 1.0)
+            return control                         # must return the control object
+
+    # after you build dpo_trainer and inject the optimiser
+    dpo_trainer.add_callback(GradClipCallback())
 
     print("⇢  using optimiser:", optim.__class__.__name__)   # should say PagedAdamW32bit
     # -----------------------------------------------------------
