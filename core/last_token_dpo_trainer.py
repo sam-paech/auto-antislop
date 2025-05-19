@@ -304,7 +304,7 @@ class LastTokenDPOTrainer(DPOTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, **_):
         ids   = inputs["prompt_ids"].to(model.device)        # [B,L]
         attn  = inputs["attention_mask"].to(model.device)    # [B,L]
-        label = inputs["chosen_token_id"].to(model.device)   # [B]
+        label = inputs["chosen_ids"][0].to(model.device)   # [B]
 
         out = model(ids, attention_mask=attn,
                     use_cache=False, return_dict=True)
