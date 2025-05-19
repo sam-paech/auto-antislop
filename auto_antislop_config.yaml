@@ -146,7 +146,7 @@ finetune_chat_template: "" # e.g. "gemma-3" -- get the chat template from unslot
 finetune_batch_size: 1
 finetune_gradient_accumulation_steps: 16
 finetune_warmup_ratio: 0.1
-finetune_num_epochs: 1 # Reduced for quick example, typically 1-3
+finetune_num_epochs: 1
 finetune_learning_rate: 0.000001 # 1e-6
 finetune_auto_learning_rate: true  # true: automatically determine learning rate based on dataset size, effective batch size & lora rank
 finetune_beta: 0.1 # DPO beta
