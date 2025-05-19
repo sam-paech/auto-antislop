@@ -357,8 +357,9 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     
 
     #from transformers import AutoTokenizer, AutoModelForCausalLM
-    #from torch.utils.data import DataLoader
+    
     from torch.nn.utils.rnn import pad_sequence
+    from torch.utils.data import DataLoader
     import torch
 
     model_name   = config['finetune_base_model_id']
@@ -588,7 +589,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
 
 
-        from torch.utils.data import DataLoader
+        
         def _gap_stats(model, dataset, collate_fn, tag,
                batch_size=2, device=None):
             model.eval()
