@@ -669,26 +669,33 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     )
 
 
-    from transformers.optimization import get_paged_adamw_32bit
-    from accelerate.utils import BNB_OPTIMIZERS
-    BNB_OPTIMIZERS["paged_adamw_32bit"] = get_paged_adamw_32bit
+    # -----------------------------------------------------------
+    # after you create dpo_trainer  (just before .train())
+    # -----------------------------------------------------------
+    from bitsandbytes.optim import PagedAdamW32bit
+    import torch
 
-    # ── 2. force (re)creation of the optimiser inside the trainer ──────────
-    if hasattr(dpo_trainer, "optimizer"):
-        del dpo_trainer.optimizer              # let .create_optimizer rebuild it
-    dpo_trainer.create_optimizer()
-
-    print("⇢  optimiser class is", dpo_trainer.optimizer.__class__.__name__)
-    # should print  PagedAdamW32bit
-
-    # ── 3. add a one-line callback to clip grads before the step ────────────
-    def _clip_grad_before_step(trainer, args, state, control, **kwargs):
-        torch.nn.utils.clip_grad_norm_(
-            trainer.model.parameters(), max_norm=1.0
-        )
-    dpo_trainer.add_callback(
-        type("GradClip", (), {"on_step_end": _clip_grad_before_step})()
+    # 1) build the optimiser on the trainable parameters only
+    optim = PagedAdamW32bit(
+        (p for p in dpo_trainer.model.parameters() if p.requires_grad),
+        lr=config["finetune_learning_rate"],
     )
+
+    # 2) inject it into the trainer / accelerator
+    dpo_trainer.optimizer = optim
+    dpo_trainer.accelerator.optimizer = optim   # keeps scheduler in sync
+
+    # 3) lightweight grad-norm clip each step
+    def _clip_before_step(trainer, args, state, control, **kw):
+        torch.nn.utils.clip_grad_norm_(trainer.model.parameters(), 1.0)
+
+    dpo_trainer.add_callback(
+        type("GradClip", (), {"on_step_end": _clip_before_step})()
+    )
+
+    print("⇢  using optimiser:", optim.__class__.__name__)   # should say PagedAdamW32bit
+    # -----------------------------------------------------------
+
 
 
 
