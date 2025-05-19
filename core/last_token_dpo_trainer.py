@@ -124,23 +124,25 @@ class LastTokenDPOTrainer(DPOTrainer):
 
         if inputs.get("chosen_ids") is not None:
             DEBUG = True  
+            EPS_P   = 1e-12        # clamp floor for probabilities
             # --- unpack ----------------------------------------------------------------
             ch_ids  = inputs["chosen_ids"].to(model.device)       # [B,C]
             ch_mask = inputs["chosen_mask"].to(model.device)      # [B,C] bool
             rej     = inputs["rejected_token_id"].to(model.device)  # [B]
 
             # --- per-token log-p and p --------------------------------------------------
-            gathered = logp_all.gather(-1, ch_ids)                # log p_i
-            probs    = gathered.exp()                             # p_i
+            gathered = logp_all.gather(-1, ch_ids)                # log p_i            
+            probs    = gathered.exp()
 
             # --- soft weight: 1 at p≤eps, linear decay to 0 at p≥1 ----------------------
             weights  = torch.clamp((eps - probs) / eps, min=0.0) * ch_mask
             zero_row = weights.sum(dim=-1, keepdim=True) < 1e-12  # all weights zero?
             weights  = torch.where(zero_row, ch_mask.float(), weights)
 
-            weights_sum        = weights.sum(dim=-1, keepdim=True)         # [B,1]
+            weights_sum        = weights.sum(dim=-1, keepdim=True)
             weighted_mean_prob = (probs * weights).sum(dim=-1, keepdim=True) / weights_sum
-            logp_good          = weighted_mean_prob.log().squeeze(-1)      # [B]
+            weighted_mean_prob = weighted_mean_prob.clamp_min(EPS_P)          # NEW
+            logp_good          = weighted_mean_prob.log().squeeze(-1)
 
             # --- rejected token ---------------------------------------------------------
             logp_bad = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)  # [B]
@@ -236,14 +238,17 @@ class LastTokenDPOTrainer(DPOTrainer):
 
         elif mode == "clip":
             # PPO-style odds-ratio clipping
-            delta  = logp_good - logp_bad                 # log-odds
+            delta  = (logp_good - logp_bad).clamp(min=-80.0, max=80.0)   # log-odds
             ratio  = torch.exp(delta)                     # odds ratio
-            clipped = torch.minimum(ratio, torch.tensor(1.0 + eps, device=ratio.device))
+            #clipped = torch.minimum(ratio, torch.tensor(1.0 + eps, device=ratio.device))
+            #pref_loss = -torch.log(clipped / (1.0 + eps)).mean()
+            MIN_R  = 1e-6
+            clipped = torch.clamp(ratio, min=MIN_R, max=1.0 + eps)
             pref_loss = -torch.log(clipped / (1.0 + eps)).mean()
             kl_loss   = 0.0
 
         else:  # "free"
-            delta = logp_good - logp_bad
+            delta  = (logp_good - logp_bad).clamp(min=-80.0, max=80.0)
             pref_loss = -F.logsigmoid(beta * delta).mean()
             kl_loss   = 0.0
 
