@@ -362,7 +362,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             model_name=model_name,
             max_seq_length=max_seq_length,
             load_in_4bit=config['finetune_load_in_4bit'],
-            dtype=torch.bfloat16 if config['finetune_load_in_4bit'] and torch.cuda.is_bf16_supported() else None,
+            dtype=torch.bfloat16 if (not config['finetune_load_in_4bit']) and torch.cuda.is_bf16_supported() else None,
         )
         
     except Exception as e:
