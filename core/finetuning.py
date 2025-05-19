@@ -445,7 +445,14 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 p.register_hook(lambda g, n=n: _hook(g, n))
     add_nan_hooks(model)
 
-    model.config._attn_implementation = "sdpa"
+    #model.config._attn_implementation = "sdpa"
+
+    from peft.tuners.lora import Linear4bitLt, LoraLayer
+    import torch
+
+    for m in model.modules():
+        if isinstance(m, (LoraLayer, Linear4bitLt)):
+            m.forward = torch.cuda.amp.autocast(enabled=False)(m.forward)
 
 
     CALC_VAL_STATS = False
