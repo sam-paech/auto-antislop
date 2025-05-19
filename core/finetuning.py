@@ -356,8 +356,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         return
     
 
-    from transformers import AutoTokenizer, AutoModelForCausalLM
-    from torch.utils.data import DataLoader
+    #from transformers import AutoTokenizer, AutoModelForCausalLM
+    #from torch.utils.data import DataLoader
     from torch.nn.utils.rnn import pad_sequence
     import torch
 
