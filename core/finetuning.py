@@ -365,7 +365,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     model_name   = config['finetune_base_model_id']
     max_seq_len  = config['finetune_max_seq_length']
     batch_size   = 1
-    steps        = 10
+    steps        = 100
     lr           = 1e-5
 
     # tokenizer
