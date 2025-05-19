@@ -301,7 +301,21 @@ class LastTokenDPOTrainer(DPOTrainer):
             return loss, metrics
         return loss
 
+    def compute_loss(self, model, inputs, return_outputs=False, **_):
+        ids   = inputs["prompt_ids"].to(model.device)        # [B,L]
+        attn  = inputs["attention_mask"].to(model.device)    # [B,L]
+        label = inputs["chosen_token_id"].to(model.device)   # [B]
 
+        out = model(ids, attention_mask=attn,
+                    use_cache=False, return_dict=True)
+        logits_last = out.logits[:, -1, :]                   # [B,V]
+
+        # standard cross-entropy on the final timestep
+        loss = F.cross_entropy(logits_last, label)
+
+        if return_outputs:
+            return loss, {"nll": loss.detach()}
+        return loss
 
     # ----------------------------------------------------------
     def _prepare_dataset(self, dataset, *args, **_):
