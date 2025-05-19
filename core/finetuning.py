@@ -392,6 +392,17 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         device_map={"": 0},                   # whole model on GPU-0
     )
 
+    import types
+
+    def fp32_lora_fwd(self, x):
+        wA, wB = self.lora_A.weight.float(), self.lora_B.weight.float()
+        return (x.float() @ wA.T @ wB.T).to(x.dtype)
+
+    for mod in model.modules():
+        if getattr(mod, "lora_A", None) is not None:
+            mod._orig_forward = mod.forward
+            mod.forward = types.MethodType(fp32_lora_fwd, mod)
+
     def add_nan_hooks(m):
         def _hook(grad, pname):
             if not torch.isfinite(grad).all():
