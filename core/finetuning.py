@@ -447,14 +447,6 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     #model.config._attn_implementation = "sdpa"
 
-    from peft.tuners.lora import Linear4bitLt, LoraLayer
-    
-
-    for m in model.modules():
-        if isinstance(m, (LoraLayer, Linear4bitLt)):
-            m.forward = torch.cuda.amp.autocast(enabled=False)(m.forward)
-
-
     CALC_VAL_STATS = False
     if CALC_VAL_STATS:
         def _collate_tdpo(features, pad_id: int, max_len: int):
