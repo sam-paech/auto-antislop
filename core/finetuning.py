@@ -420,8 +420,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         model = get_peft_model(model, lora_cfg)        
         
         from bitsandbytes.optim import PagedAdamW32bit
-        import torch
-        from transformers.trainer_callback import TrainerCallback
+        import torch        
 
         # build optimiser on trainable params only
         optim = PagedAdamW32bit(
@@ -729,13 +728,14 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         dpo_trainer.optimizer = optim
 
     CLIP_GRADS = False
-    # gradient-clip each step
-    class GradClipCb(TrainerCallback):
-        def on_step_end(self, args, state, control, **kw):
-            torch.nn.utils.clip_grad_norm_(kw["model"].parameters(), 1.0)
-            return control
+    # gradient-clip each step    
         
     if CLIP_GRADS: # can help if running into model collapse, but will slow training
+        from transformers.trainer_callback import TrainerCallback
+        class GradClipCb(TrainerCallback):
+            def on_step_end(self, args, state, control, **kw):
+                torch.nn.utils.clip_grad_norm_(kw["model"].parameters(), 1.0)
+                return control
         dpo_trainer.add_callback(GradClipCb())
 
 
