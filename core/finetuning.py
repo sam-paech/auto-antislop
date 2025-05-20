@@ -725,7 +725,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         ),
     )
 
-    dpo_trainer.optimizer = optim
+    if not use_unsloth:
+        dpo_trainer.optimizer = optim
 
     CLIP_GRADS = False
     # gradient-clip each step
