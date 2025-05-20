@@ -420,14 +420,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         )
         model = get_peft_model(model, lora_cfg)        
         
-        from bitsandbytes.optim import PagedAdamW32bit
-        import torch        
-
-        # build optimiser on trainable params only
-        optim = PagedAdamW32bit(
-            (p for p in model.parameters() if p.requires_grad),
-            lr = config["finetune_learning_rate"],
-        )
+        
 
     
 
@@ -734,7 +727,17 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     if not use_unsloth:
         # replace the optimiser to fix nan issues when training qwen3
+
+        from bitsandbytes.optim import PagedAdamW32bit
         from transformers.optimization import get_scheduler
+        import torch        
+
+        # build optimiser on trainable params only
+        optim = PagedAdamW32bit(
+            (p for p in model.parameters() if p.requires_grad),
+            lr = config["finetune_learning_rate"],
+        )
+        
         # 1. replace the optimizer
         dpo_trainer.optimizer = optim
 
