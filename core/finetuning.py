@@ -658,10 +658,10 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     # --- derive LR automatically --------------------------------------------    
 
     # ── learning‑rate schedule parameters ───────────────────────────────────
-    N_SWITCH = 5_000          # centre of transition (examples)
+    N_SWITCH = 2_500          # centre of transition (examples)
     WIDTH    = 1_000          # half‑width of tanh ramp (examples)
     LR_SCALE_CONST = 0.15
-    eta0     = 2e-4           # base LR before scaling
+    eta0     = 1e-3           # base LR before scaling
 
     # ── auto‑scale LR ───────────────────────────────────────────────────────
     if config.get("finetune_auto_learning_rate", False):
