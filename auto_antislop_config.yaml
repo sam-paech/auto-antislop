@@ -131,6 +131,7 @@ top_n_repetition_stat: 50 # N-grams from each category to track for repetition s
 # --- Finetuning (Optional) ---
 finetune_enabled: true
 finetune_mode: "tdpo-multi" # dpo / tdpo (tokenwise-dpo)
+finetune_use_unsloth: false
 finetune_tdpo_dataset: "" # you can specify an existing tdpo dataset, or let the pipeline use the one produced in the generation step
 finetune_base_model_id: "Qwen/Qwen3-4B" # Base model for DPO
 finetune_max_seq_length: 1500 # this may truncate some outputs
