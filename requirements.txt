@@ -8,6 +8,7 @@ tqdm>=4.60
 tiktoken
 wordfreq>=3.0
 regex
+flash-attn
 
 # For vLLM (if managed by this script)
 # vllm # User should install this separately if managing vLLM manually or if specific version needed
