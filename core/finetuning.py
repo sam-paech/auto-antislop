@@ -437,7 +437,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
 
 
-    CALC_VAL_STATS = True
+    CALC_VAL_STATS = False
     if CALC_VAL_STATS:
         def _collate_tdpo(features, pad_id: int, max_len: int):
             """
