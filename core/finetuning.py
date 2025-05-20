@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 def load_imports(use_unsloth):
     # --- Attempt to import Unsloth and related libraries only when this function is called ---
     try:
+        if use_unsloth:
+            from unsloth import FastLanguageModel
+            from unsloth.chat_templates import get_chat_template
+            globals()['get_chat_template'] = get_chat_template
+            globals()['FastLanguageModel'] = FastLanguageModel
         
         from transformers import AutoTokenizer, TextStreamer # Added TextStreamer for potential inference example
         from transformers import AutoModelForCausalLM
@@ -41,11 +46,7 @@ def load_imports(use_unsloth):
         import os
         import transformers
 
-        if use_unsloth:
-            from unsloth import FastLanguageModel
-            from unsloth.chat_templates import get_chat_template
-            globals()['get_chat_template'] = get_chat_template
-            globals()['FastLanguageModel'] = FastLanguageModel
+        
 
         # Make all imports available in the global scope        
         globals()['AutoTokenizer'] = AutoTokenizer
