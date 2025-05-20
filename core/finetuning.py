@@ -2,14 +2,14 @@ from typing import TYPE_CHECKING
 
 # placeholders for later lazy loading
 if TYPE_CHECKING:
-    from unsloth import FastLanguageModel as FastLanguageModelType
-    from transformers import AutoTokenizer as AutoTokenizerType
-    from transformers import TextStreamer as TextStreamerType
-    from transformers import AutoModelForCausalLM as AutoModelForCausalLMType
-    from peft import PeftModel as PeftModelType
+    from unsloth import FastLanguageModel
+    from transformers import AutoTokenizer
+    from transformers import TextStreamer
+    from transformers import AutoModelForCausalLM
+    from peft import PeftModel
     from trl import DPOTrainer, DPOConfig
-    from datasets import Dataset as DatasetType
-    from unsloth.chat_templates import get_chat_template as get_chat_template_type
+    from datasets import Dataset
+    from unsloth.chat_templates import get_chat_template
     import torch # Keep torch as it might be used for GPU checks earlier if needed    
     # typing.Optional can be imported at the top level if used in type hints outside the function
     from torch.utils.data import default_collate
@@ -25,31 +25,36 @@ import json
 from utils.dataset_helpers import load_tdpo_dataset, load_tdpo_multi_dataset
 logger = logging.getLogger(__name__)
 
-def load_imports():
+def load_imports(use_unsloth):
     # --- Attempt to import Unsloth and related libraries only when this function is called ---
     try:
-        from unsloth import FastLanguageModel
+        
         from transformers import AutoTokenizer, TextStreamer # Added TextStreamer for potential inference example
         from transformers import AutoModelForCausalLM
         from peft import PeftModel
         from trl import DPOTrainer, DPOConfig
-        from datasets import load_dataset
-        from unsloth.chat_templates import get_chat_template
+        from datasets import load_dataset        
         import torch
         from torch.utils.data import default_collate
         import torch.nn.functional as F
         from torch.nn.utils.rnn import pad_sequence
+        import os
+        import transformers
 
-        # Make all imports available in the global scope
-        globals()['FastLanguageModel'] = FastLanguageModel
+        if use_unsloth:
+            from unsloth import FastLanguageModel
+            from unsloth.chat_templates import get_chat_template
+            globals()['get_chat_template'] = get_chat_template
+            globals()['FastLanguageModel'] = FastLanguageModel
+
+        # Make all imports available in the global scope        
         globals()['AutoTokenizer'] = AutoTokenizer
         globals()['TextStreamer'] = TextStreamer
         globals()['AutoModelForCausalLM'] = AutoModelForCausalLM
         globals()['PeftModel'] = PeftModel
         globals()['DPOTrainer'] = DPOTrainer
         globals()['DPOConfig'] = DPOConfig
-        globals()['load_dataset'] = load_dataset
-        globals()['get_chat_template'] = get_chat_template
+        globals()['load_dataset'] = load_dataset        
         globals()['torch'] = torch
         globals()['default_collate'] = default_collate
         globals()['F'] = F
@@ -178,7 +183,8 @@ def freeze_early_layers(model, n_unfrozen: int = 4, verbose: bool = True):
 
 
 def run_dpo_finetune(config: dict, experiment_run_dir: Path):
-    load_imports()
+    use_unsloth = config.get("finetune_use_unsloth", False)
+    load_imports(use_unsloth)
 
     logger.info("Starting finetuning process...")
 
@@ -354,36 +360,84 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     else:
         logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'tdpo'.")
         return
-
-
     
-    try:
-        model, _ = FastLanguageModel.from_pretrained(
-            model_name=model_name,
-            max_seq_length=max_seq_length,
-            load_in_4bit=config['finetune_load_in_4bit'],
-            dtype=torch.bfloat16 if config['finetune_load_in_4bit'] and torch.cuda.is_bf16_supported() else None,
+        
+
+    import torch
+    
+    if use_unsloth:
+        try:
+            model, _ = FastLanguageModel.from_pretrained(
+                model_name=model_name,
+                max_seq_length=max_seq_length,
+                load_in_4bit=config['finetune_load_in_4bit'],
+                dtype=torch.bfloat16 if config['finetune_load_in_4bit'] and torch.cuda.is_bf16_supported() else None,
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to load base model '{model_name}' or tokenizer for DPO: {e}", exc_info=True)
+            return
+    else:
+        from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+        from peft import LoraConfig, get_peft_model
+        import torch
+
+        base_model_id = config["finetune_base_model_id"]
+        max_len       = config["finetune_max_seq_length"]
+
+        # 1. base model --------------------------------------------------
+        if config["finetune_load_in_4bit"]:
+            bnb_cfg = BitsAndBytesConfig(
+                load_in_4bit          = True,
+                bnb_4bit_quant_type   = "nf4",
+                bnb_4bit_use_double_quant = True,
+                bnb_4bit_compute_dtype    = torch.bfloat16,
+            )
+            model = AutoModelForCausalLM.from_pretrained(
+                base_model_id,
+                quantization_config = bnb_cfg,
+                device_map          = {"": 0},
+            )
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                base_model_id,
+                torch_dtype = torch.bfloat16,             # Qwen-3 was trained in bf16
+                device_map  = {"": 0},
+            )
+
+        #model.config._attn_implementation = "eager"        # avoid flash-attn fp16 path
+        model.config._attn_implementation = "flash_attention_2"
+        model.train()
+
+        # 2. LoRA --------------------------------------------------------
+        lora_cfg = LoraConfig(
+            r                = config["finetune_lora_r"],
+            lora_alpha       = config["finetune_lora_alpha"],
+            lora_dropout     = config["finetune_lora_dropout"],
+            bias             = "none",
+            target_modules   = config["finetune_target_modules"],
         )
+        model = get_peft_model(model, lora_cfg)        
         
-    except Exception as e:
-        logger.error(f"Failed to load base model '{model_name}' or tokenizer for DPO: {e}", exc_info=True)
-        return
-    
+        from bitsandbytes.optim import PagedAdamW32bit
+        import torch        
+
+        # build optimiser on trainable params only
+        optim = PagedAdamW32bit(
+            (p for p in model.parameters() if p.requires_grad),
+            lr = config["finetune_learning_rate"],
+        )
+
+    print("⇢  trainable params:",
+        sum(p.numel() for p in model.parameters() if p.requires_grad))
 
 
-    locs = {}
-    for n, p in model.named_parameters():
-        locs.setdefault(p.device.type, 0)
-        locs[p.device.type] += 1
-    print(locs)                              # e.g. {'cpu': 82, 'cuda': 0}
-    print("first param device:", next(model.parameters()).device)
-        
 
 
     
     # Hard-disable gradient-checkpointing for TDPO
-    if mode == "tdpo":
-        model.config._attn_implementation = "flash_attention_2"
+    if mode in ["tdpo", "tdpo-multi"]:
+        #model.config._attn_implementation = "flash_attention_2"
         # turn off every ckpt flag Unsloth uses
         if hasattr(model, "gradient_checkpointing_disable"):
             model.gradient_checkpointing_disable()
@@ -409,20 +463,21 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             if hasattr(model.config, "gradient_checkpointing"):
                 model.config.gradient_checkpointing = False
 
-    model = FastLanguageModel.get_peft_model(
-        model,
-        r=config['finetune_lora_r'],
-        lora_alpha=config['finetune_lora_alpha'],
-        lora_dropout=config['finetune_lora_dropout'],
-        bias="none",
-        target_modules=config['finetune_target_modules'],
-        use_gradient_checkpointing=config['finetune_gradient_checkpointing'],
-        random_state=3407,
-        max_seq_length=max_seq_length,
-    )
+    if use_unsloth:
+        model = FastLanguageModel.get_peft_model(
+            model,
+            r=config['finetune_lora_r'],
+            lora_alpha=config['finetune_lora_alpha'],
+            lora_dropout=config['finetune_lora_dropout'],
+            bias="none",
+            target_modules=config['finetune_target_modules'],
+            use_gradient_checkpointing=config['finetune_gradient_checkpointing'],
+            random_state=3407,
+            max_seq_length=max_seq_length,
+        )
 
-    if mode == "tdpo":
-        model.config._attn_implementation = "flash_attention_2"
+    if mode in ["tdpo", "tdpo-multi"]:
+        #model.config._attn_implementation = "flash_attention_2"
         # turn off every ckpt flag Unsloth uses
         if hasattr(model, "gradient_checkpointing_disable"):
             model.gradient_checkpointing_disable()
@@ -431,10 +486,6 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 mod.gradient_checkpointing = False
         if hasattr(model.config, "gradient_checkpointing"):
             model.config.gradient_checkpointing = False
-
-
-
-
 
 
     CALC_VAL_STATS = False
@@ -481,7 +532,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
 
 
-        from torch.utils.data import DataLoader
+        
         def _gap_stats(model, dataset, collate_fn, tag,
                batch_size=2, device=None):
             model.eval()
@@ -643,6 +694,10 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
 
     TrainerClass = LastTokenDPOTrainer if mode.lower() in ["tdpo", "tdpo-multi"] else DPOTrainer
+    if use_unsloth:
+        optimiser_str = "adamw_8bit"
+    else:        
+        optimiser_str = "paged_adamw_32bit"
 
     dpo_trainer = TrainerClass(
         model=model,
@@ -656,7 +711,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             num_train_epochs=config['finetune_num_epochs'],
             learning_rate=config['finetune_learning_rate'],
             logging_steps=10,
-            optim="adamw_8bit",
+            optim=optimiser_str,
             seed=42,
             output_dir=str(finetune_output_dir),
             max_length=max_seq_length,
@@ -672,6 +727,21 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             max_grad_norm=0.5, # be nice to the baseline model
         ),
     )
+
+    if not use_unsloth:
+        dpo_trainer.optimizer = optim
+
+    CLIP_GRADS = False
+    # gradient-clip each step    
+        
+    if CLIP_GRADS: # can help if running into model collapse, but will slow training
+        from transformers.trainer_callback import TrainerCallback
+        class GradClipCb(TrainerCallback):
+            def on_step_end(self, args, state, control, **kw):
+                torch.nn.utils.clip_grad_norm_(kw["model"].parameters(), 1.0)
+                return control
+        dpo_trainer.add_callback(GradClipCb())
+
 
     logger.info(f"Starting training. Output will be in {finetune_output_dir}. Check tensorboard for progress.")
 
