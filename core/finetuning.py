@@ -694,6 +694,10 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
 
     TrainerClass = LastTokenDPOTrainer if mode.lower() in ["tdpo", "tdpo-multi"] else DPOTrainer
+    if use_unsloth:
+        optimiser_str = "adamw_8bit"
+    else:        
+        optimiser_str = "paged_adamw_32bit"
 
     dpo_trainer = TrainerClass(
         model=model,
@@ -707,7 +711,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             num_train_epochs=config['finetune_num_epochs'],
             learning_rate=config['finetune_learning_rate'],
             logging_steps=10,
-            optim="paged_adamw_32bit",
+            optim=optimiser_str,
             seed=42,
             output_dir=str(finetune_output_dir),
             max_length=max_seq_length,
