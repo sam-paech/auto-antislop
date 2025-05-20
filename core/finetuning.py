@@ -429,8 +429,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             lr = config["finetune_learning_rate"],
         )
 
-    print("⇢  trainable params:",
-        sum(p.numel() for p in model.parameters() if p.requires_grad))
+    
 
 
 
@@ -487,6 +486,10 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 mod.gradient_checkpointing = False
         if hasattr(model.config, "gradient_checkpointing"):
             model.config.gradient_checkpointing = False
+
+
+    print("⇢  trainable params:",
+        sum(p.numel() for p in model.parameters() if p.requires_grad))
 
 
     CALC_VAL_STATS = False
@@ -730,7 +733,26 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     )
 
     if not use_unsloth:
+        # replace the optimiser to fix nan issues when training qwen3
+        from transformers.optimization import get_scheduler
+        # 1. replace the optimizer
         dpo_trainer.optimizer = optim
+
+        # 2. compute the true number of *optimizer* steps
+        steps_per_epoch = math.ceil(
+            len(dpo_trainer.get_train_dataloader())
+            / dpo_trainer.args.gradient_accumulation_steps
+        )
+        total_steps  = steps_per_epoch * dpo_trainer.args.num_train_epochs
+        warmup_steps = int(total_steps * dpo_trainer.args.warmup_ratio)
+
+        # 3. build a fresh scheduler on the new param groups
+        dpo_trainer.lr_scheduler = get_scheduler(
+            name=dpo_trainer.args.lr_scheduler_type,
+            optimizer=optim,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=total_steps,
+        )
 
     CLIP_GRADS = False
     # gradient-clip each step    
