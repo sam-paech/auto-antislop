@@ -117,6 +117,7 @@ def _build_generation_command(
         "--invert-probs", str(config['generation_invert_probs']),
         "--ngram-remove-stopwords", str(config['generation_ngram_remove_stopwords']).lower(),
         "--ngram-language", config['generation_ngram_language'],
+        "--enable-refusal-detection", str(config.get("generation_refusal_detection", False)),
     ]
     command = list(command_base) # Create a mutable copy
 
