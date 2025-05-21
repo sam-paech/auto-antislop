@@ -52,11 +52,12 @@ _GENERATION: Sequence[str] = (
     "generation_param_min_p",
     "generation_param_timeout",
     "generation_param_stop_sequences",
-    "generation_backtracking_max_retries_per_position",
     "generation_ngram_remove_stopwords",
     "generation_ngram_language",
     "generation_force_backtrack",
     "generation_invert_probs",
+    "generation_prompt_template",
+    "generation_system_prompt"
 
 )
 
