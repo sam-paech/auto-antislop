@@ -22,7 +22,7 @@ vllm_extra_args: []
 
 # Iteration 0: Generates the baseline dataset & computes slop strings/ngrams to ban
 # Iteration 1: Generates a dataset using antislop, banning those strings & ngrams. Recomputes the slop strings/ngrams at the end & adds any new slop to the ban lists
-# Iteration 2+: Same as 1
+# Iteration 2+: Extra iterations catch slop that emerges after the initial set is banned
 num_iterations: 2 # Minimum 2 iterations (this is enough to catch most slop)
 
 # --- Generation Script (antislop-vllm/main.py) Parameters ---
@@ -141,7 +141,7 @@ finetune_tdpo_dataset: "" # you can specify an existing tdpo dataset, or let the
 finetune_base_model_id: "unsloth/gemma-3-12b-it" # Base model for DPO
 finetune_max_seq_length: 1500 # this may truncate some outputs
 finetune_load_in_4bit: false
-finetune_early_stopping_wins: 0.8 # Early stopping threshold for fraction of *chosen* completions that are selected over *rejected*. More than 0.75 may be overtrained.
+finetune_early_stopping_wins: 0.75 # Early stopping threshold for fraction of *chosen* completions that are selected over *rejected*. More than 0.75 may be overtrained.
 finetune_early_stopping_loss: null # Loss threshold for early stopping. Set to null to disable.
 finetune_lora_r: 8
 finetune_lora_alpha: 8
@@ -156,7 +156,7 @@ finetune_warmup_ratio: 0.1
 finetune_num_epochs: 1
 finetune_learning_rate: 0.000001
 finetune_auto_learning_rate: true  # true: automatically determine learning rate based on dataset size, effective batch size & lora rank
-finetune_auto_learning_rate_adjustment_scaling: 0.2 # scale the auto-lr by this factor
+finetune_auto_learning_rate_adjustment_scaling: 0.15 # scale the auto-lr by this factor
 finetune_beta: 0.1 # DPO beta
 finetune_output_dir_suffix: "_tdpo_exp01" # Appended to experiment run dir
 finetune_save_merged_16bit: true

@@ -532,6 +532,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         
         def _gap_stats(model, dataset, collate_fn, tag,
                batch_size=2, device=None):
+            from torch.utils.data import DataLoader
+
             model.eval()
             loader = DataLoader(dataset, batch_size=batch_size,
                                 shuffle=False, collate_fn=collate_fn)
