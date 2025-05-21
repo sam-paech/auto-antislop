@@ -81,6 +81,7 @@ def _build_generation_command(
         return str(p.resolve()) if p else None
     
     tdpo_pairs_jsonl_path_str = get_abs_path_str(output_jsonl_path.parent / f"iter_{str(iter_idx)}_tdpo_pairs.jsonl")
+    experiment_dir = output_jsonl_path.parent
 
     # Determine the API base URL for generation requests
     gen_api_base_url = config.get('generation_api_base_url')
@@ -121,6 +122,10 @@ def _build_generation_command(
         "--system-prompt", config['generation_system_prompt'],
     ]
     command = list(command_base) # Create a mutable copy
+
+    if iter_idx > 0:
+        prev_iter_jsonl_path = experiment_dir / f"iter_{iter_idx-1}_creative_writing_generations.jsonl"
+        cmd += ["--refusals-file", str(prev_iter_jsonl_path)]
 
     # Use full-length chunks for the baseline run (iter_idx == 0);
     # fall back to the configured chunk size for every later iteration.
