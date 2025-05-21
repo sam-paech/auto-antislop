@@ -189,7 +189,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     logger.info("Starting finetuning process...")
 
-    from core.last_token_dpo_trainer import LastTokenDPOTrainer
+    from core.last_token_dpo_trainer import LastTokenDPOTrainer, ThresholdStop
     
 
 
@@ -726,6 +726,22 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             #max_grad_norm=0.5, # be nice to the baseline model
         ),
     )
+
+    if config.get("finetune_early_stopping_wins", None):
+        dpo_trainer.add_callback(
+            ThresholdStop("choice_win",
+                        threshold=config["finetune_early_stopping_wins"],
+                        higher_is_better=True)
+        )
+
+    if config.get("finetune_early_stopping_loss", None) != None:
+        dpo_trainer.add_callback(
+            ThresholdStop("loss",
+                        threshold=config["finetune_early_stopping_loss"],
+                        higher_is_better=False)
+        )
+
+
 
     if not use_unsloth:
         # replace the optimiser to fix nan issues when training qwen3

@@ -1,7 +1,94 @@
 from core.finetuning import DPOTrainer, torch, pad_sequence, F
 
-# putting the class here because we're lazy loading unsloth + other imports
-# yes it's messy =/
+
+# ---------------------------------------------------------------------
+# Early-stopping on any logged scalar (loss, choice_win, etc.)
+# ---------------------------------------------------------------------
+from transformers.trainer_callback import TrainerCallback
+
+
+class ThresholdStop(TrainerCallback):
+    """
+    Stop training immediately when `monitor` crosses `threshold`.
+
+    If `higher_is_better` is True  → stop when metric >= threshold.  
+    If False                       → stop when metric <= threshold.
+    """
+    def __init__(self, monitor: str, threshold: float, higher_is_better: bool):
+        self.monitor           = monitor
+        self.threshold         = threshold
+        self.higher_is_better  = higher_is_better
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is None or self.monitor not in logs:
+            return
+        value = logs[self.monitor]
+        stop  = (value >= self.threshold) if self.higher_is_better else (value <= self.threshold)
+        if stop:
+            control.should_training_stop = True
+            print(f"[ThresholdStop] {self.monitor}={value:.4f} "
+                  f"crossed {'≥' if self.higher_is_better else '≤'} "
+                  f"{self.threshold} – stopping.")
+            
+class EarlyStoppingByMetric(TrainerCallback):
+    """
+    Stop training when a monitored metric has stopped improving.
+
+    Args
+    ----
+    monitor: str
+        Key that appears in the `logs` dict (e.g. "loss", "choice_win").
+    higher_is_better: bool
+        True  → metric should increase (e.g. choice_win)  
+        False → metric should decrease (e.g. loss / pref_loss)
+    patience: int
+        How many *log events* with no improvement to wait before stopping.
+    min_delta: float
+        Minimum change that counts as an improvement.
+    """
+    def __init__(self,
+                 monitor: str,
+                 higher_is_better: bool,
+                 patience: int = 10,
+                 min_delta: float = 0.0):
+        self.monitor          = monitor
+        self.higher_is_better = higher_is_better
+        self.patience         = patience
+        self.min_delta        = min_delta
+        self.best             = None
+        self.counter          = 0                     # events since last improv.
+
+    # ── invoked every time trainer logs metrics ─────────────────────
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is None or self.monitor not in logs:
+            return
+
+        current = logs[self.monitor]
+
+        # first observation
+        if self.best is None:
+            self.best = current
+            return
+
+        # compute signed improvement
+        if self.higher_is_better:
+            improvement = current - self.best
+        else:
+            improvement = self.best - current
+
+        # has the metric improved “enough”?
+        if improvement > self.min_delta:
+            self.best    = current
+            self.counter = 0
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                #  signal the Trainer to halt
+                control.should_training_stop = True
+                print(f"[EarlyStopping] '{self.monitor}' plateaued "
+                      f"(best={self.best:.5f}) – stopping training.")
+
+
 class LastTokenDPOTrainer(DPOTrainer):
     """
     Trainer for “single-next-token” (TDPO) preference learning.
