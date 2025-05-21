@@ -261,6 +261,22 @@ def compare_to_human(gen_norm: dict, human_counts: dict, human_total_chars: floa
             gen_only[term] = {**data, "human_count": 0, "human_freq_norm": 0.0, "freq_ratio_gen/hu": math.inf if data["gen_freq_norm"] > 0 else 0.0}
     return both, gen_only
 
+def _is_refusal(rec: dict) -> bool:
+    """
+    Returns True if this JSONL record represents a refused / skipped prompt.
+    Recognises all variants produced by main.py / auto_unslop.py.
+    """
+    if rec.get("refusal_detected") is True:
+        return True
+    status = rec.get("status", "").lower()
+    if status in {"skipped"}:
+        return True
+    if status == "failed" and isinstance(rec.get("error"), str):
+        err = rec["error"].lower()
+        if err.startswith("refusal detected") or err.startswith("skipped -- prior refusal"):
+            return True
+    return False
+
 def analyze_iteration_outputs_core(
     generated_jsonl_path: Path, human_profile_full: dict, 
     iter_analysis_output_dir: Path, config: dict, stop_words_set: set
@@ -269,7 +285,16 @@ def analyze_iteration_outputs_core(
     iter_analysis_output_dir.mkdir(parents=True, exist_ok=True)
 
     gen_rows = local_load_jsonl_file(str(generated_jsonl_path))
-    gen_texts = [row["generation"] for row in gen_rows if isinstance(row, dict) and isinstance(row.get("generation"), str)]
+
+    gen_texts: List[str] = [
+        rec["generation"]
+        for rec in gen_rows
+        if isinstance(rec, dict)
+           and isinstance(rec.get("generation"), str)
+           and rec["generation"].strip()               # non-empty
+           and not _is_refusal(rec)                    # ⬅️  new guard
+    ]
+    
     if not gen_texts:
         logger.warning(f"No usable text in {generated_jsonl_path}. Skipping analysis.")
         return None, None, None, None, [], 0
