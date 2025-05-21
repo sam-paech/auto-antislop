@@ -81,7 +81,7 @@ def _build_generation_command(
         return str(p.resolve()) if p else None
     
     tdpo_pairs_jsonl_path_str = get_abs_path_str(output_jsonl_path.parent / f"iter_{str(iter_idx)}_tdpo_pairs.jsonl")
-    experiment_dir = output_jsonl_path.parent
+    experiment_dir = output_jsonl_path.parent.resolve()
 
     # Determine the API base URL for generation requests
     gen_api_base_url = config.get('generation_api_base_url')
