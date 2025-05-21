@@ -125,7 +125,7 @@ def _build_generation_command(
 
     if iter_idx > 0:
         prev_iter_jsonl_path = experiment_dir / f"iter_{iter_idx-1}_creative_writing_generations.jsonl"
-        cmd += ["--refusals-file", str(prev_iter_jsonl_path)]
+        command.extend(["--refusals-file", str(prev_iter_jsonl_path)])
 
     # Use full-length chunks for the baseline run (iter_idx == 0);
     # fall back to the configured chunk size for every later iteration.
