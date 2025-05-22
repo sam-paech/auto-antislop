@@ -179,63 +179,46 @@ class LastTokenDPOTrainer(DPOTrainer):
         beta = getattr(self, "beta", 0.1)           # reused everywhere
 
         # ── unpack ---------------------------------------------------------
-        ids      = inputs["prompt_ids"].to(model.device)       # [B,L]
-        attn     = inputs["attention_mask"].to(model.device)   # [B,L]
-        #chosen   = inputs["chosen_token_id"].to(model.device)  # [B]
-        rejected = inputs["rejected_token_id"].to(model.device)  # [B]
+        ids   = inputs["prompt_ids"].to(model.device)      # [B,L] left-padded
+        attn  = inputs["attention_mask"].to(model.device)  # [B,L] 0/1
+        B, L  = ids.shape
+        pad_id = self.padding_value
 
-        # only enable gradient flow for the final token, not for the rest of the context
-        # ──────────────────────────────────────────────────────────────
-        #  Two-pass KV-cache: prompt frozen, last token trainable
-        # ──────────────────────────────────────────────────────────────
-        pad_id   = self.padding_value          # e.g. tokenizer.pad_token_id
-        B, L = ids.shape
-        last_idx = attn.sum(1) - 1            # [B]  index of final real token
+        # index of last real prompt token (n-1 for each sample)
+        last_idx = attn.sum(1) - 1                         # [B]
 
-        # ------------------------------------------------------------------
-        #  Build logical position indices that ignore the left pads
-        # ------------------------------------------------------------------
-        seq_len  = attn.sum(1)                        # [B]  (= n, the prompt length)
-        pad_off  = (L - seq_len).unsqueeze(1)         # [B,1] number of pads per row
-        arange_L = torch.arange(L, device=ids.device).unsqueeze(0)  # [1,L]
-
-        pos_ctx = (arange_L - pad_off).clamp(min=0)   # [-pads … n-2, n-1] → clip
-        pos_ctx = pos_ctx.masked_fill(attn == 0, 0)   # put 0s where attention_mask=0
-
-        pos_tok = (seq_len - 1).unsqueeze(1)          # [B,1]  logical index n-1
-
-        # ----- 1) context-only pass  (no grad) -----------------------------
+        # ---- context pass (no grad) ------------------------------------------------
         ctx_ids  = ids.clone()
+        ctx_ids[torch.arange(B), last_idx] = pad_id        # mask away token n-1
         ctx_attn = attn.clone()
-        ctx_ids [torch.arange(B), last_idx] = pad_id        # mask away last tok
         ctx_attn[torch.arange(B), last_idx] = 0
 
         with torch.no_grad():
             ctx_out = model(
                 ctx_ids,
                 attention_mask = ctx_attn,
-                position_ids   = pos_ctx,                   # logical positions!
-                use_cache      = True,
-                return_dict    = True,
+                use_cache=True,
+                return_dict=True,
             )
         past_kv = ctx_out.past_key_values
 
-        # ----- 2) last-token pass  (grad) ----------------------------------
-        tok_ids  = ids.gather(1, last_idx.unsqueeze(1))     # [B,1]
+        # ---- last-token pass (grad) ------------------------------------------------
+        tok_ids  = ids.gather(1, last_idx.unsqueeze(1))    # [B,1]  token n-1
         tok_attn = torch.ones_like(tok_ids, dtype=attn.dtype)
-        pos_tok  = (last_idx).unsqueeze(1)                  # logical n-1
 
-        tok_out = model(
+        tok_out  = model(
             tok_ids,
             attention_mask = tok_attn,
-            position_ids   = pos_tok,
-            past_key_values= past_kv,
-            use_cache      = False,
-            return_dict    = True,
+            past_key_values = past_kv,
+            use_cache=False,
+            return_dict=True,
         )
+        logp_all = F.log_softmax(tok_out.logits.squeeze(1), dim=-1)   # [B,V]
 
-        logits_last = tok_out.logits.squeeze(1)             # [B, V]
-        logp_all    = F.log_softmax(logits_last, dim=-1)
+        # sanity: we must have exactly one row per example
+        assert tok_ids.shape[1] == 1
+        assert logp_all.dim() == 2
+
 
 
 
