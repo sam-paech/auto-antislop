@@ -486,6 +486,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
 
     CALC_VAL_STATS = True
+    N_VAL_ITEMS = 50
     if CALC_VAL_STATS:
         def _collate_tdpo(features, pad_id: int, max_len: int):
             """
@@ -611,8 +612,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
 
         if True: # skip this check for now
-            pre_train_rows, pre_train_stats = _gap_stats(model, train_ds.select(range(min(200, len(train_ds)))), collate, "train_pre")
-            pre_val_rows , pre_val_stats   = _gap_stats(model, val_ds.select(range(min(200, len(val_ds)))),   collate, "val_pre")
+            pre_train_rows, pre_train_stats = _gap_stats(model, train_ds.select(range(min(N_VAL_ITEMS, len(train_ds)))), collate, "train_pre")
+            pre_val_rows , pre_val_stats   = _gap_stats(model, val_ds.select(range(min(N_VAL_ITEMS, len(val_ds)))),   collate, "val_pre")
 
 
             with open(analysis_dir / "train_pre.jsonl", "w") as f:
@@ -818,8 +819,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         # ────────────────────────────────────────────────────────────────────
         # 3) POST-TRAIN statistics  (same API as above)
         # ────────────────────────────────────────────────────────────────────
-        post_train_rows, post_train_stats = _gap_stats(model, train_ds.select(range(min(200, len(train_ds)))), collate, "train_post")
-        post_val_rows , post_val_stats   = _gap_stats(model, val_ds.select(range(min(200, len(val_ds)))),   collate, "val_post")
+        post_train_rows, post_train_stats = _gap_stats(model, train_ds.select(range(min(N_VAL_ITEMS, len(train_ds)))), collate, "train_post")
+        post_val_rows , post_val_stats   = _gap_stats(model, val_ds.select(range(min(N_VAL_ITEMS, len(val_ds)))),   collate, "val_post")
 
 
         with open(analysis_dir / "train_post.jsonl", "w") as f:

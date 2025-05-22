@@ -185,29 +185,51 @@ class LastTokenDPOTrainer(DPOTrainer):
         rejected = inputs["rejected_token_id"].to(model.device)  # [B]
 
         # only enable gradient flow for the final token, not for the rest of the context
-        # --- obtain final-layer hidden states, independent of model class ----------
+        # ──────────────────────────────────────────────────────────────
+        #  Two-pass KV-cache: prompt frozen, last token trainable
+        # ──────────────────────────────────────────────────────────────
+        pad_id   = self.padding_value          # e.g. tokenizer.pad_token_id
+        B, L     = ids.shape
+        last_idx = attn.sum(1) - 1             # [B] index of final real token
 
-        # -- forward -----------------------------------------------------------------
-        out = model(ids,
-                    attention_mask=attn,
-                    use_cache=False,
-                    return_dict=True,
-                    output_hidden_states=True)
+        # 1) build context-only inputs ( prompt without last token )
+        ctx_ids  = ids.clone()
+        ctx_attn = attn.clone()
+        ctx_ids [torch.arange(B), last_idx] = pad_id
+        ctx_attn[torch.arange(B), last_idx] = 0        # mask it out
 
-        last_hidden = (out.last_hidden_state
-                    if getattr(out, "last_hidden_state", None) is not None
-                    else out.hidden_states[-1])                       # [B, L, H]
+        # 2) build single-token inputs ( only the last token )
+        tok_ids  = torch.full_like(ids, pad_id)
+        tok_attn = torch.zeros_like(attn)
+        tok_ids [torch.arange(B), last_idx] = ids [torch.arange(B), last_idx]
+        tok_attn[torch.arange(B), last_idx] = 1
 
-        # ----- single position ------------------------------------------------------
-        proj         = self._get_proj(model)
-        target_dtype = proj.weight.dtype
-        last_token   = last_hidden[:, -1, :].to(target_dtype)           # [B, H]
+        # 3) forward context under no-grad to get past_kv
+        with torch.no_grad():
+            ctx_out = model(
+                ctx_ids,
+                attention_mask = ctx_attn,
+                use_cache      = True,
+                return_dict    = True,
+            )
+        past_kv = ctx_out.past_key_values      # frozen constants
 
-        logits_last  = proj(last_token)                                 # [B, V]
-        logp_all     = F.log_softmax(logits_last, dim=-1)               # [B, V]
+        # 4) forward last token with grad, re-using past_kv
+        tok_out = model(
+            tok_ids,
+            attention_mask = tok_attn,
+            past_key_values= past_kv,
+            use_cache      = False,
+            return_dict    = True,
+        )
 
+        # logits for the final token (shape [B, V])
+        logits_last = tok_out.logits[torch.arange(B, device=model.device), last_idx]
 
+        # convert to log-probs for downstream loss code
+        logp_all = F.log_softmax(logits_last, dim=-1)   # [B, V]
 
+        
 
         if inputs.get("chosen_ids") is not None:
             DEBUG = False  
