@@ -267,7 +267,7 @@ class LastTokenDPOTrainer(DPOTrainer):
 
         # ───────────────────────── DEBUG BLOCK ────────────────────────────
         # (Keep your debug block as is, it should now show much smaller |Δ log-p|)
-        DEBUG = True
+        DEBUG = False
         if DEBUG and not getattr(self, "_debug_ran", False):
             self._debug_ran = True
 
