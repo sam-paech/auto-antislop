@@ -578,8 +578,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                         delta   = (lp_good > lp_bad).float()        # 1 if win, 0 if loss
 
 
-                    lp_bad  = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)
-                    delta   = lp_good - lp_bad
+                    #lp_bad  = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)
+                    #delta   = lp_good - lp_bad
 
                     tot_delta += delta.sum().item()
                     wins      += (delta > 0).sum().item()
