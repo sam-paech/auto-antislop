@@ -581,8 +581,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                     #lp_bad  = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)
                     #delta   = lp_good - lp_bad
 
-                    tot_delta += delta.sum().item()
-                    wins      += (delta > 0).sum().item()
+                    tot_delta += delta.sum().item()     # for mean_delta
+                    wins      += delta.sum().item()     # for chosen_win
 
                     # record first chosen id for debugging
                     first_ch = (
