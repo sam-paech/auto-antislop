@@ -189,68 +189,40 @@ class LastTokenDPOTrainer(DPOTrainer):
         #  Two-pass KV-cache: prompt frozen, last token trainable
         # ──────────────────────────────────────────────────────────────
         pad_id   = self.padding_value          # e.g. tokenizer.pad_token_id
-        B, L     = ids.shape
-        last_idx = attn.sum(1) - 1             # [B] index of final real token
+        B, L = ids.shape
+        last_idx = attn.sum(1) - 1                          # [B]
 
-        # 1) build context-only inputs ( prompt without last token )
+        # ----- 1) context-only pass  (no grad) -----------------------------
         ctx_ids  = ids.clone()
         ctx_attn = attn.clone()
-        ctx_ids [torch.arange(B), last_idx] = pad_id
-        ctx_attn[torch.arange(B), last_idx] = 0        # mask it out
-
-        # 2) build single-token inputs ( only the last token )
-        tok_ids  = torch.full_like(ids, pad_id)
-        tok_attn = torch.zeros_like(attn)
-        tok_ids [torch.arange(B), last_idx] = ids [torch.arange(B), last_idx]
-        tok_attn[torch.arange(B), last_idx] = 1
-
-        # 3) forward context under no-grad to get past_kv
-        # ---------------------------------------------------------------------
-        #  Build logical position indices that count only non-pad tokens
-        # ---------------------------------------------------------------------
-        # ids:      [B, L] left-padded     (pad...pad p0 … p_{n-2}  p_{n-1})
-        # ctx_attn: [B, L] 1 for real tk   (0 ...  0   1   …   1      0     )
-        # -------------------------------------------------------------------
-
-        seq_lens = attn.sum(1)                       # [B] = n
-
-        # =========== 1) logical positions for the context pass ===============
-
-        # arange(0, L)  ->  broadcast to [B, L]
-        arange_L   = torch.arange(L, device=ids.device).unsqueeze(0)
-        # offset    = #pads for each row = L - n
-        pad_offset = (L - seq_lens).unsqueeze(1)     # [B, 1]
-
-        pos_ctx = arange_L - pad_offset              #  -#pads … n-2, n-1
-        pos_ctx = pos_ctx.clamp(min=0)               #  map pads to 0
-        pos_ctx = pos_ctx.masked_fill(ctx_attn == 0, 0)
-
-        # =========== 2) logical position for the last prompt token ===========
-
-        pos_tok = (seq_lens - 1).unsqueeze(1)        # [B, 1]  value = n-1
-
-        # ======================= forward passes ==============================
+        ctx_ids [torch.arange(B), last_idx] = pad_id        # mask away last tok
+        ctx_attn[torch.arange(B), last_idx] = 0
 
         with torch.no_grad():
             ctx_out = model(
                 ctx_ids,
                 attention_mask = ctx_attn,
-                position_ids   = pos_ctx,
+                position_ids   = pos_ctx,                   # logical positions!
                 use_cache      = True,
                 return_dict    = True,
             )
         past_kv = ctx_out.past_key_values
 
+        # ----- 2) last-token pass  (grad) ----------------------------------
+        tok_ids  = ids.gather(1, last_idx.unsqueeze(1))     # [B,1]
+        tok_attn = torch.ones_like(tok_ids, dtype=attn.dtype)
+        pos_tok  = (last_idx).unsqueeze(1)                  # logical n-1
+
         tok_out = model(
-            tok_ids,                                 # [B, 1] (just p_{n-1})
-            attention_mask = tok_attn,               # all 1’s
-            position_ids   = pos_tok,                # n-1  (matches probe)
+            tok_ids,
+            attention_mask = tok_attn,
+            position_ids   = pos_tok,
             past_key_values= past_kv,
             use_cache      = False,
             return_dict    = True,
         )
 
-        logits_last = tok_out.logits.squeeze(1)      # [B, V]
+        logits_last = tok_out.logits.squeeze(1)             # [B, V]
         logp_all    = F.log_softmax(logits_last, dim=-1)
 
 
@@ -265,8 +237,8 @@ class LastTokenDPOTrainer(DPOTrainer):
             rej     = inputs["rejected_token_id"].to(model.device)  # [B]
 
             # --- per-token log-p and p --------------------------------------------------
-            idx_range = torch.arange(logp_all.size(0), device=logp_all.device).unsqueeze(1)
-            gathered  = logp_all[idx_range, ch_ids]        # [B, C]
+            batch_rows = torch.arange(B, device=logp_all.device).unsqueeze(1)
+            gathered   = logp_all[batch_rows, ch_ids]           # [B, C]
             probs     = gathered.exp()                     # p_i
 
             # --- soft weight: 1 at p≤eps, linear decay to 0 at p≥1 ----------------------
