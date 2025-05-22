@@ -179,29 +179,33 @@ class LastTokenDPOTrainer(DPOTrainer):
         beta = getattr(self, "beta", 0.1)           # reused everywhere
 
         # ── unpack ---------------------------------------------------------
-        ids   = inputs["prompt_ids"].to(model.device)      # [B,L]
-        attn  = inputs["attention_mask"].to(model.device)  # [B,L]
+        ids   = inputs["prompt_ids"].to(model.device)      # [B, L]
+        attn  = inputs["attention_mask"].to(model.device)  # [B, L]
         B, L  = ids.shape
         pad_id = self.padding_value
 
-        # -------- logical position indices (ignore pads) ------------------
-        seq_len  = attn.sum(1)                         # [B]  (= n)
-        pad_off  = (L - seq_len).unsqueeze(1)          # [B,1]
-        arange_L = torch.arange(L, device=ids.device).unsqueeze(0)  # [1,L]
+        # ── logical 0‥n-1 position IDs (pads → 0) ───────────────────────────────
+        seq_len    = attn.sum(1)                            # [B] (n)
+        batch_rows = torch.arange(B, device=ids.device)
 
-        pos_full = (arange_L - pad_off).clamp(min=0)   # 0 … n-1, pads→0
-        pos_full = pos_full.masked_fill(attn == 0, 0)
+        pad_off   = (L - seq_len).unsqueeze(1)              # [B, 1]
+        arange_L  = torch.arange(L, device=ids.device).unsqueeze(0)  # [1, L]
+        pos_full  = (arange_L - pad_off).clamp(min=0)       # [B, L]
+        pos_full  = pos_full.masked_fill(attn == 0, 0)
 
-        last_idx = seq_len - 1                         # [B]
+        # ── identify the *column* of the last prompt token after left-padding ───
+        last_col  = ids.new_full((B,), L - 1)               # always right-most column
+        last_pos  = seq_len - 1                             # [B] logical position n-1
 
-        # ------------- pass 1 : context (no grad) --------------------------
-        ctx_ids  = ids.clone()
-        ctx_ids[torch.arange(B), last_idx] = pad_id
-        ctx_attn = attn.clone()
-        ctx_attn[torch.arange(B), last_idx] = 0
+        # ────────────────── pass 1: context (no grad) ───────────────────────────
+        ctx_ids   = ids.clone()
+        ctx_ids[batch_rows, last_col] = pad_id              # replace token with PAD
 
-        pos_ctx = pos_full.clone()
-        pos_ctx[torch.arange(B), last_idx] = 0         # dummy for the pad
+        ctx_attn  = attn.clone()
+        ctx_attn[batch_rows, last_col] = 0                  # mask it out
+
+        pos_ctx   = pos_full.clone()
+        pos_ctx[batch_rows, last_col] = 0                   # dummy position for PAD
 
         with torch.no_grad():
             ctx_out = model(
@@ -211,23 +215,24 @@ class LastTokenDPOTrainer(DPOTrainer):
                 use_cache      = True,
                 return_dict    = True,
             )
-        past_kv = ctx_out.past_key_values
+        past_kv = ctx_out.past_key_values                   # frozen context
 
-        # ------------- pass 2 : last prompt token (grad) -------------------
-        tok_ids  = ids.gather(1, last_idx.unsqueeze(1))     # [B,1]
+        # ────────────────── pass 2: last prompt token (with grad) ───────────────
+        tok_ids  = ids[batch_rows, last_col].unsqueeze(1)   # [B, 1]   real token
         tok_attn = torch.ones_like(tok_ids, dtype=attn.dtype)
-        pos_tok  = last_idx.unsqueeze(1)                    # [B,1]  value n-1
+        pos_tok  = last_pos.unsqueeze(1)                    # [B, 1]   value n-1
 
         tok_out = model(
             tok_ids,
-            attention_mask = tok_attn,
-            position_ids   = pos_tok,
-            past_key_values= past_kv,
-            use_cache      = False,
-            return_dict    = True,
+            attention_mask  = tok_attn,
+            position_ids    = pos_tok,
+            past_key_values = past_kv,
+            use_cache       = False,
+            return_dict     = True,
         )
 
-        logp_all = F.log_softmax(tok_out.logits.squeeze(1), dim=-1)   # [B,V]
+        logp_all = F.log_softmax(tok_out.logits.squeeze(1), dim=-1)   # [B, V]
+
 
 
 
