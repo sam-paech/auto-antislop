@@ -359,8 +359,18 @@ class LastTokenDPOTrainer(DPOTrainer):
         # ── total loss & metrics ------------------------------------------
         loss = pref_loss + kl_loss
 
-        rho        = logp_good - logp_bad
-        choice_win = (rho > 0).float().mean().detach()
+        if inputs.get("chosen_ids") is not None:        # TDPO-MULTI
+            # log-probs for each chosen token, same shape as ch_ids
+            lp_chosen = logp_all.gather(-1, ch_ids)               # [B,C]
+            lp_bad    = logp_bad.unsqueeze(-1)                    # [B,1] -> [B,1]
+
+            # boolean wins per token (requires same mask as ch_mask)
+            wins_tok  = (lp_chosen > lp_bad) & ch_mask            # [B,C] bool
+            frac_win  = wins_tok.float().sum(-1) / ch_mask.sum(-1)  # [B]
+            choice_win = frac_win.mean().detach()                 # scalar
+        else:                                        # TDPO single
+            choice_win = (logp_good > logp_bad).float().mean().detach()
+
         metrics = {
             "pref_loss":  pref_loss.detach(),
             "choice_win": choice_win,

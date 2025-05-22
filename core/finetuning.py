@@ -553,15 +553,30 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                         logits_next = model(ids, attention_mask=attn).logits[:, -1, :]
                         logp_all    = torch.log_softmax(logits_next, -1)
 
-                    # ----- variant detection -----
-                    if "chosen_ids" in batch:                      # TDPO-MULTI
-                        ch_ids  = batch["chosen_ids"].to(device)
-                        ch_mask = batch["chosen_mask"].to(device)
-                        gathered = logp_all.gather(-1, ch_ids).masked_fill(~ch_mask, -1e9)
-                        lp_good = torch.logsumexp(gathered, dim=-1)        # [B]
-                    else:                                            # TDPO
+                    # ----- variant detection -------------------------------------------------
+                    if "chosen_ids" in batch:                             # TDPO-MULTI
+                        ch_ids  = batch["chosen_ids"].to(device)          # [B, C]
+                        ch_mask = batch["chosen_mask"].to(device)         # [B, C]  bool
+
+                        # log-prob of every chosen token
+                        lp_chosen = logp_all.gather(-1, ch_ids)           # [B, C]
+
+                        # log-prob of the rejected token (same for all C columns)
+                        lp_bad = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)  # [B]
+
+                        # per-token wins (True if chosen beats rejected)
+                        wins_tok = (lp_chosen > lp_bad.unsqueeze(-1)) & ch_mask      # [B, C] bool
+
+                        # fraction of winners for each training example
+                        frac_win = wins_tok.float().sum(-1) / ch_mask.sum(-1)        # [B]
+
+                        delta = frac_win                        # use fraction as the “margin”
+                    else:                                        # TDPO single-token
                         ch      = batch["chosen_token_id"].to(device)
-                        lp_good = logp_all.gather(-1, ch.unsqueeze(-1)).squeeze(-1)
+                        lp_good = logp_all.gather(-1, ch.unsqueeze(-1)).squeeze(-1)  # [B]
+                        lp_bad  = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1) # [B]
+                        delta   = (lp_good > lp_bad).float()        # 1 if win, 0 if loss
+
 
                     lp_bad  = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)
                     delta   = lp_good - lp_bad
