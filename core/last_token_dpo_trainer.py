@@ -208,46 +208,51 @@ class LastTokenDPOTrainer(DPOTrainer):
         # ---------------------------------------------------------------------
         #  Build logical position indices that count only non-pad tokens
         # ---------------------------------------------------------------------
-        seq_lens = attn.sum(1)                              # [B]  (# real prompt tokens)
+        # ids:      [B, L] left-padded     (pad...pad p0 … p_{n-2}  p_{n-1})
+        # ctx_attn: [B, L] 1 for real tk   (0 ...  0   1   …   1      0     )
+        # -------------------------------------------------------------------
 
-        # --- context positions ------------------------------------------------
-        # pos(i,j) = 0,1,2,… for the real tokens, 0 for left-pads
-        pos_ctx = torch.where(
-            ctx_attn,
-            (ctx_attn.cumsum(1) - 1),
-            torch.zeros_like(ctx_attn)
-        ).to(model.device)                                  # [B, L]
+        seq_lens = attn.sum(1)                       # [B] = n
 
-        # --- token positions --------------------------------------------------
-        pos_tok = (seq_lens - 1).unsqueeze(1).to(model.device)  # [B, 1]
+        # =========== 1) logical positions for the context pass ===============
 
-        # ---------------------------------------------------------------------
-        # 1) CONTEXT PASS  (no grad, frozen kv)
-        # ---------------------------------------------------------------------
+        # arange(0, L)  ->  broadcast to [B, L]
+        arange_L   = torch.arange(L, device=ids.device).unsqueeze(0)
+        # offset    = #pads for each row = L - n
+        pad_offset = (L - seq_lens).unsqueeze(1)     # [B, 1]
+
+        pos_ctx = arange_L - pad_offset              #  -#pads … n-2, n-1
+        pos_ctx = pos_ctx.clamp(min=0)               #  map pads to 0
+        pos_ctx = pos_ctx.masked_fill(ctx_attn == 0, 0)
+
+        # =========== 2) logical position for the last prompt token ===========
+
+        pos_tok = (seq_lens - 1).unsqueeze(1)        # [B, 1]  value = n-1
+
+        # ======================= forward passes ==============================
+
         with torch.no_grad():
             ctx_out = model(
                 ctx_ids,
-                attention_mask=ctx_attn,
+                attention_mask = ctx_attn,
                 position_ids   = pos_ctx,
                 use_cache      = True,
                 return_dict    = True,
             )
         past_kv = ctx_out.past_key_values
 
-        # ---------------------------------------------------------------------
-        # 2) LAST-PROMPT-TOKEN PASS  (grad on weights only)
-        # ---------------------------------------------------------------------
         tok_out = model(
-            tok_ids,                            # shape [B, 1]
-            attention_mask = tok_attn,          # all ones
-            position_ids   = pos_tok,           # logical position = n-1
+            tok_ids,                                 # [B, 1] (just p_{n-1})
+            attention_mask = tok_attn,               # all 1’s
+            position_ids   = pos_tok,                # n-1  (matches probe)
             past_key_values= past_kv,
             use_cache      = False,
             return_dict    = True,
         )
 
-        logits_last = tok_out.logits.squeeze(1)             # [B, V]
+        logits_last = tok_out.logits.squeeze(1)      # [B, V]
         logp_all    = F.log_softmax(logits_last, dim=-1)
+
 
 
         
