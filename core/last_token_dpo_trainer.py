@@ -242,56 +242,75 @@ class LastTokenDPOTrainer(DPOTrainer):
         logp_all    = F.log_softmax(logits_last, dim=-1)
 
 
-        DEBUG = True          # flip to False when done
-        if DEBUG:            
+        # ───────────────────────── DEBUG BLOCK ────────────────────────────
+        # Paste inside compute_loss immediately after `logp_all` is defined.
+        DEBUG = True                         # flip to False when done
+        if DEBUG and not getattr(self, "_debug_ran", False):
+            self._debug_ran = True           # run only on first training batch
+            import torch.nn.functional as F
 
-            # ---------- 1) shapes ------------------------------------------
-            assert tok_ids.shape[1] == 1,  f"tok_ids len={tok_ids.shape[1]}"
-            assert logp_all.dim()  == 2,  f"logp_all dim={logp_all.dim()}"
+            # 1) shape sanity ------------------------------------------------
+            assert tok_ids.shape[1] == 1,  f"tok_ids shape {tok_ids.shape}"
+            assert logp_all.dim()   == 2,  f"logp_all dim {logp_all.dim()}"
 
-            # ---------- 2) single-pass logits ------------------------------
+            # 2) single-pass reference distribution -------------------------
             with torch.no_grad():
-                one_pass_logits = model(
-                    ids, attention_mask=attn
-                ).logits[:, -1, :]                               # [B,V]
-                one_pass_logp  = F.log_softmax(one_pass_logits, -1)
+                one_logits = model(
+                    ids,
+                    attention_mask=attn,
+                    use_cache=False,
+                    return_dict=True,
+                ).logits[:, -1, :]                    # [B, V]
+                one_logp = F.log_softmax(one_logits, -1)
 
-            # compare distributions element-wise
-            max_abs_diff = (logp_all - one_pass_logp).abs().max().item()
+            max_abs_diff = (one_logp - logp_all).abs().max().item()
             print(f"[DBG] max |Δ log-p| two-pass vs one-pass : {max_abs_diff:.3e}")
 
-            # ---------- 3) choice-win agreement ----------------------------
+            # 3) choice-win comparison --------------------------------------
             batch_rows = torch.arange(ids.size(0), device=ids.device)
 
-            if "chosen_ids" in inputs:                 # TDPO-MULTI
-                ch_ids  = inputs["chosen_ids"].to(ids.device)      # [B,C]
-                ch_mask = inputs["chosen_mask"].to(ids.device)
-                rej     = inputs["rejected_token_id"].to(ids.device)
+            if "chosen_ids" in inputs:                # TDPO-MULTI
+                ch_ids  = inputs["chosen_ids" ].to(ids.device)       # [B,C]
+                ch_mask = inputs["chosen_mask"].to(ids.device)       # [B,C]
+                rej     = inputs["rejected_token_id"].to(ids.device) # [B]
 
-                # internal choice_win already computed later; here do probe
-                probe_good = one_pass_logp[batch_rows.unsqueeze(1), ch_ids]  # [B,C]
-                probe_bad  = one_pass_logp[batch_rows, rej].unsqueeze(1)     # [B,1]
-                wins_tok   = (probe_good > probe_bad) & ch_mask
-                probe_win  = (wins_tok.float().sum(-1) /
+                probe_good = one_logp[batch_rows.unsqueeze(1), ch_ids]     # [B,C]
+                probe_bad  = one_logp[batch_rows, rej].unsqueeze(1)        # [B,1]
+                wins_probe = (probe_good > probe_bad) & ch_mask
+                probe_win  = (wins_probe.float().sum(-1) /
                             ch_mask.sum(-1)).mean().item()
-            else:                                       # single-winner
-                ch_ids = inputs["chosen_token_id"].to(ids.device)
-                rej    = inputs["rejected_token_id"].to(ids.device)
-                probe_good = one_pass_logp[batch_rows, ch_ids]
-                probe_bad  = one_pass_logp[batch_rows, rej]
+
+                int_good = logp_all[batch_rows.unsqueeze(1), ch_ids]
+                int_bad  = logp_all[batch_rows, rej].unsqueeze(1)
+                wins_int = (int_good > int_bad) & ch_mask
+                int_win  = (wins_int.float().sum(-1) /
+                            ch_mask.sum(-1)).mean().item()
+
+                same_id = ((ch_ids == rej.unsqueeze(1)) & ch_mask).sum().item()
+            else:                                     # single-winner
+                ch_ids = inputs["chosen_token_id"].to(ids.device)           # [B]
+                rej    = inputs["rejected_token_id"].to(ids.device)         # [B]
+
+                probe_good = one_logp[batch_rows, ch_ids]                   # [B]
+                probe_bad  = one_logp[batch_rows, rej]                      # [B]
                 probe_win  = (probe_good > probe_bad).float().mean().item()
 
-            print(f"[DBG] probe win (one-pass) = {probe_win:.4f}")
+                int_good = logp_all[batch_rows, ch_ids]
+                int_bad  = logp_all[batch_rows, rej]
+                int_win  = (int_good > int_bad).float().mean().item()
 
-            # internal value will be printed later in loss; compare visually
-            # ---------- 4) same-id pairs -----------------------------------
-            same_id = (ch_ids == rej.unsqueeze(-1)) if "chosen_ids" in inputs else (ch_ids == rej)
-            bad_rows = same_id.sum().item()
-            if bad_rows:
-                print(f"[WARN] {bad_rows} examples where chosen == rejected!")
+                same_id = (ch_ids == rej).sum().item()
 
-            # ----- stop after first batch ----------------------------------
+            print(f"[DBG] probe  win (one-pass) = {probe_win:.4f}")
+            print(f"[DBG] internal win (two-pass)= {int_win:.4f}")
+
+            if same_id:
+                print(f"[WARN] {same_id} examples where chosen == rejected!")
+
+            # 4) stop after first batch so you can inspect the log ----------
             raise RuntimeError("Debug run complete – stopping trainer.")
+        # ────────────────────── END DEBUG BLOCK ───────────────────────────
+
 
 
         
