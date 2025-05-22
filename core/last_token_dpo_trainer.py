@@ -214,20 +214,21 @@ class LastTokenDPOTrainer(DPOTrainer):
             )
         past_kv = ctx_out.past_key_values      # frozen constants
 
-        # 4) forward last token with grad, re-using past_kv
-        tok_out = model(
+        # ------------------------------- last-token pass (fixed)
+        last_tok = ids.gather(                # shape [B, 1]
+            1, last_idx.unsqueeze(-1)
+        )                                     # simply [[c₀] …]
+        tok_ids  = last_tok                   # [B, 1]
+        tok_attn = torch.ones_like(tok_ids)   # [B, 1]
+        tok_out  = model(
             tok_ids,
-            attention_mask = tok_attn,
-            past_key_values= past_kv,
-            use_cache      = False,
-            return_dict    = True,
-        )
-
-        # logits for the final token (shape [B, V])
-        logits_last = tok_out.logits[:, -1, :]
-
-        # convert to log-probs for downstream loss code
-        logp_all = F.log_softmax(logits_last, dim=-1)   # [B, V]
+            attention_mask=tok_attn,          # length = past_len + 1 internally
+            past_key_values=past_kv,
+            use_cache=False,
+            return_dict=True,
+        )                                     # logits.shape = [B, 1, V]
+        logits_last = tok_out.logits.squeeze(1)  # [B, V]
+        logp_all    = F.log_softmax(logits_last, dim=-1)
 
         
 
