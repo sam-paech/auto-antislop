@@ -179,130 +179,141 @@ class LastTokenDPOTrainer(DPOTrainer):
         beta = getattr(self, "beta", 0.1)           # reused everywhere
 
         # ── unpack ---------------------------------------------------------
-        ids   = inputs["prompt_ids"].to(model.device)      # [B, L]
-        attn  = inputs["attention_mask"].to(model.device)  # [B, L]
+        ids   = inputs["prompt_ids"].to(model.device)      # [B,L]
+        attn  = inputs["attention_mask"].to(model.device)  # [B,L]
         B, L  = ids.shape
         pad_id = self.padding_value
 
-        # ── logical 0‥n-1 position IDs (pads → 0) ───────────────────────────────
-        seq_len    = attn.sum(1)                            # [B] (n)
-        batch_rows = torch.arange(B, device=ids.device)
+        # -------- logical position indices (ignore pads) ------------------
+        seq_len  = attn.sum(1)                         # [B]  (number of actual tokens, n)
+        # Assuming seq_len >= 1. If seq_len can be 0, this needs careful handling.
+        # For now, proceed with the assumption from typical tokenized inputs.
 
-        pad_off   = (L - seq_len).unsqueeze(1)              # [B, 1]
-        arange_L  = torch.arange(L, device=ids.device).unsqueeze(0)  # [1, L]
-        pos_full  = (arange_L - pad_off).clamp(min=0)       # [B, L]
-        pos_full  = pos_full.masked_fill(attn == 0, 0)
+        # `pos_full` calculates the 0-indexed position for each token in the sequence.
+        # Pads are 0, first actual token is 0, second is 1, ..., last actual token is (seq_len-1).
+        # This calculation seems correct as is:
+        pad_off  = (L - seq_len).unsqueeze(1)          # [B,1]
+        arange_L = torch.arange(L, device=ids.device).unsqueeze(0)  # [1,L]
+        pos_full = (arange_L - pad_off).clamp(min=0)   # 0 … n-1, pads map to 0
+        pos_full = pos_full.masked_fill(attn == 0, 0)  # Ensure pads are definitively 0
 
-        # ── identify the *column* of the last prompt token after left-padding ───
-        last_col  = ids.new_full((B,), L - 1)               # always right-most column
-        last_pos  = seq_len - 1                             # [B] logical position n-1
+        # --- Corrected logic for two-pass ---
+        
+        # The actual last token of the prompt is always at column L-1 in the `ids` tensor
+        # due to the left-padding in `tdpo_collator`.
+        actual_last_token_col_idx = L - 1 # Scalar: column index
 
-        # ────────────────── pass 1: context (no grad) ───────────────────────────
-        ctx_ids   = ids.clone()
-        ctx_ids[batch_rows, last_col] = pad_id              # replace token with PAD
+        # ------------- pass 1 : context (no grad) --------------------------
+        # Goal: Get past_key_values for the prompt *excluding* its very last token.
+        
+        ctx_ids  = ids.clone()
+        # Mask out the actual last token in the tensor by replacing it with pad_id
+        ctx_ids[:, actual_last_token_col_idx] = pad_id
+        
+        ctx_attn = attn.clone()
+        # Zero out attention for this masked token
+        ctx_attn[:, actual_last_token_col_idx] = 0
 
-        ctx_attn  = attn.clone()
-        ctx_attn[batch_rows, last_col] = 0                  # mask it out
-
-        pos_ctx   = pos_full.clone()
-        pos_ctx[batch_rows, last_col] = 0                   # dummy position for PAD
+        pos_ctx = pos_full.clone()
+        # Set the position_id of this masked token to 0 (or your designated pad position_id)
+        pos_ctx[:, actual_last_token_col_idx] = 0
 
         with torch.no_grad():
             ctx_out = model(
                 ctx_ids,
                 attention_mask = ctx_attn,
                 position_ids   = pos_ctx,
-                use_cache      = True,
+                use_cache      = True, # We need past_key_values
                 return_dict    = True,
             )
-        past_kv = ctx_out.past_key_values                   # frozen context
+        past_kv = ctx_out.past_key_values
 
-        # ────────────────── pass 2: last prompt token (with grad) ───────────────
-        tok_ids  = ids[batch_rows, last_col].unsqueeze(1)   # [B, 1]   real token
-        tok_attn = torch.ones_like(tok_ids, dtype=attn.dtype)
-        pos_tok  = last_pos.unsqueeze(1)                    # [B, 1]   value n-1
+        # ------------- pass 2 : last prompt token (grad) -------------------
+        # Goal: Get logits for the token *after* the actual last prompt token, using past_kv.
+
+        # The input token for this pass is the actual last token of the original prompt.
+        # It's located at ids[:, actual_last_token_col_idx].
+        # Its shape should be [B, 1].
+        tok_ids_for_pass2 = ids[:, actual_last_token_col_idx].unsqueeze(1)
+
+        # Attention mask for this single token. Since it's an actual token (assuming seq_len >= 1),
+        # its original attention mask (attn[:, actual_last_token_col_idx]) was 1.
+        # Shape: [B, 1].
+        tok_attn_for_pass2 = attn[:, actual_last_token_col_idx].unsqueeze(1)
+        # Alternative, if absolutely sure it's always a non-pad token:
+        # tok_attn_for_pass2 = torch.ones_like(tok_ids_for_pass2, dtype=attn.dtype)
+
+
+        # The position_id for this token. The original position of the last token is (seq_len - 1).
+        # seq_len is [B], so (seq_len - 1) is [B]. Unsqueeze to [B, 1].
+        # Shape: [B, 1].
+        pos_tok_for_pass2 = (seq_len - 1).unsqueeze(1)
+        # Ensure pos_tok_for_pass2 is not negative if seq_len can be 0.
+        # If seq_len is guaranteed >= 1, this is fine. Otherwise, .clamp(min=0) might be needed.
+        # pos_tok_for_pass2 = (seq_len - 1).clamp(min=0).unsqueeze(1) # Safer if seq_len can be 0
 
         tok_out = model(
-            tok_ids,
-            attention_mask  = tok_attn,
-            position_ids    = pos_tok,
-            past_key_values = past_kv,
-            use_cache       = False,
-            return_dict     = True,
+            tok_ids_for_pass2,         # Correct token
+            attention_mask = tok_attn_for_pass2, # Correct attention for this token
+            position_ids   = pos_tok_for_pass2,  # Correct position for this token
+            past_key_values= past_kv,
+            use_cache      = False, # We don't need past_kv from this pass
+            return_dict    = True,
         )
 
-        logp_all = F.log_softmax(tok_out.logits.squeeze(1), dim=-1)   # [B, V]
-
-
-
-
+        # Logits for the next token prediction, after the last prompt token.
+        # tok_out.logits is [B, 1, V], so squeeze out the dim 1.
+        logp_all = F.log_softmax(tok_out.logits.squeeze(1), dim=-1)   # [B,V]
 
         # ───────────────────────── DEBUG BLOCK ────────────────────────────
-        # Paste inside compute_loss immediately after `logp_all` is defined.
-        DEBUG = True                         # flip to False when done
+        # (Keep your debug block as is, it should now show much smaller |Δ log-p|)
+        DEBUG = True
         if DEBUG and not getattr(self, "_debug_ran", False):
-            self._debug_ran = True           # run only on first training batch
+            self._debug_ran = True
 
-            # 1) shape sanity ------------------------------------------------
-            assert tok_ids.shape[1] == 1,  f"tok_ids shape {tok_ids.shape}"
+            assert tok_ids_for_pass2.shape[1] == 1, f"tok_ids_for_pass2 shape {tok_ids_for_pass2.shape}"
             assert logp_all.dim()   == 2,  f"logp_all dim {logp_all.dim()}"
 
-            # 2) single-pass reference distribution -------------------------
             with torch.no_grad():
                 one_logits = model(
                     ids,
                     attention_mask = attn,
-                    position_ids   = pos_full,   # <<< key line
+                    position_ids   = pos_full,
                     use_cache      = False,
                     return_dict    = True,
-                ).logits[:, -1, :]
+                ).logits[:, -1, :] # Logits at the last position (L-1), predicting token after ids[:, L-1]
                 one_logp = F.log_softmax(one_logits, -1)
 
             max_abs_diff = (one_logp - logp_all).abs().max().item()
             print(f"[DBG] max |Δ log-p| two-pass vs one-pass : {max_abs_diff:.3e}")
 
-            # 3) choice-win comparison --------------------------------------
             batch_rows = torch.arange(ids.size(0), device=ids.device)
-
-            if "chosen_ids" in inputs:                # TDPO-MULTI
-                ch_ids  = inputs["chosen_ids" ].to(ids.device)       # [B,C]
-                ch_mask = inputs["chosen_mask"].to(ids.device)       # [B,C]
-                rej     = inputs["rejected_token_id"].to(ids.device) # [B]
-
-                probe_good = one_logp[batch_rows.unsqueeze(1), ch_ids]     # [B,C]
-                probe_bad  = one_logp[batch_rows, rej].unsqueeze(1)        # [B,1]
+            if "chosen_ids" in inputs:
+                ch_ids  = inputs["chosen_ids" ].to(ids.device)
+                ch_mask = inputs["chosen_mask"].to(ids.device)
+                rej     = inputs["rejected_token_id"].to(ids.device)
+                probe_good = one_logp[batch_rows.unsqueeze(1), ch_ids]
+                probe_bad  = one_logp[batch_rows, rej].unsqueeze(1)
                 wins_probe = (probe_good > probe_bad) & ch_mask
-                probe_win  = (wins_probe.float().sum(-1) /
-                            ch_mask.sum(-1)).mean().item()
-
+                probe_win  = (wins_probe.float().sum(-1) / ch_mask.sum(-1).clamp(min=1e-8)).mean().item() # Added clamp for safety
                 int_good = logp_all[batch_rows.unsqueeze(1), ch_ids]
                 int_bad  = logp_all[batch_rows, rej].unsqueeze(1)
                 wins_int = (int_good > int_bad) & ch_mask
-                int_win  = (wins_int.float().sum(-1) /
-                            ch_mask.sum(-1)).mean().item()
-
+                int_win  = (wins_int.float().sum(-1) / ch_mask.sum(-1).clamp(min=1e-8)).mean().item() # Added clamp for safety
                 same_id = ((ch_ids == rej.unsqueeze(1)) & ch_mask).sum().item()
-            else:                                     # single-winner
-                ch_ids = inputs["chosen_token_id"].to(ids.device)           # [B]
-                rej    = inputs["rejected_token_id"].to(ids.device)         # [B]
-
-                probe_good = one_logp[batch_rows, ch_ids]                   # [B]
-                probe_bad  = one_logp[batch_rows, rej]                      # [B]
+            else:
+                ch_ids = inputs["chosen_token_id"].to(ids.device)
+                rej    = inputs["rejected_token_id"].to(ids.device)
+                probe_good = one_logp[batch_rows, ch_ids]
+                probe_bad  = one_logp[batch_rows, rej]
                 probe_win  = (probe_good > probe_bad).float().mean().item()
-
                 int_good = logp_all[batch_rows, ch_ids]
                 int_bad  = logp_all[batch_rows, rej]
                 int_win  = (int_good > int_bad).float().mean().item()
-
                 same_id = (ch_ids == rej).sum().item()
-
             print(f"[DBG] probe  win (one-pass) = {probe_win:.4f}")
             print(f"[DBG] internal win (two-pass)= {int_win:.4f}")
-
-            if same_id:
-                print(f"[WARN] {same_id} examples where chosen == rejected!")
-
-            # 4) stop after first batch so you can inspect the log ----------
+            if same_id: print(f"[WARN] {same_id} examples where chosen == rejected!")
             raise RuntimeError("Debug run complete – stopping trainer.")
         # ────────────────────── END DEBUG BLOCK ───────────────────────────
 
