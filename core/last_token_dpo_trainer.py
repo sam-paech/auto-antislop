@@ -209,37 +209,42 @@ class LastTokenDPOTrainer(DPOTrainer):
 
         pos_tok = (seq_len - 1).unsqueeze(1)             # [B,1]  value n-1
 
-        # ----- 1) context-only pass  (no grad) -----------------------------
+        # ids  : [B,L]  left-padded prompt
+        # attn : [B,L]
+        B, L = ids.shape
+        last_idx = attn.sum(1) - 1                # [B]
+
+        # ---------- context pass (unchanged, no grad) --------------------
         ctx_ids  = ids.clone()
+        ctx_ids[torch.arange(B), last_idx] = pad_id
         ctx_attn = attn.clone()
-        ctx_ids [torch.arange(B), last_idx] = pad_id        # mask away last tok
         ctx_attn[torch.arange(B), last_idx] = 0
 
-        # ------------- context (no-grad) -----------------
         with torch.no_grad():
             ctx_out = model(
                 ctx_ids,
                 attention_mask = ctx_attn,
-                position_ids   = pos_ctx,      # <-- new
                 use_cache      = True,
                 return_dict    = True,
             )
-        past_kv = ctx_out.past_key_values
+        past_kv = ctx_out.past_key_values          # frozen
 
-        # ------------- last-token (grad) -----------------
-        tok_ids  = ids.gather(1, last_idx.unsqueeze(1))          # [B,1]
+        # ---------- last-token pass  (override position_id) --------------
+        tok_ids  = ids.gather(1, last_idx.unsqueeze(1))   # [B,1]  token n-1
         tok_attn = torch.ones_like(tok_ids, dtype=attn.dtype)
+        pos_tok  = last_idx.unsqueeze(1)                  # [B,1]  value = L-1
 
         tok_out = model(
             tok_ids,
             attention_mask = tok_attn,
-            position_ids   = pos_tok,      # <-- new
+            position_ids   = pos_tok,     # ← key line
             past_key_values= past_kv,
             use_cache      = False,
             return_dict    = True,
         )
 
         logp_all = F.log_softmax(tok_out.logits.squeeze(1), dim=-1)   # [B,V]
+
 
 
 
