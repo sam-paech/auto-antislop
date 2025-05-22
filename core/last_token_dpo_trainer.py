@@ -265,8 +265,10 @@ class LastTokenDPOTrainer(DPOTrainer):
             rej     = inputs["rejected_token_id"].to(model.device)  # [B]
 
             # --- per-token log-p and p --------------------------------------------------
-            gathered = logp_all.gather(-1, ch_ids)                # log p_i
-            probs    = gathered.exp()                             # p_i
+            gathered = logp_all.unsqueeze(1).gather(
+                -1, ch_ids.unsqueeze(-1)
+            ).squeeze(-1)                                            # [B, C]
+            probs = gathered.exp()                                   # p_i
 
             # --- soft weight: 1 at p≤eps, linear decay to 0 at p≥1 ----------------------
             weights  = torch.clamp((eps - probs) / eps, min=0.0) * ch_mask
