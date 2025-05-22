@@ -624,8 +624,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             print("\n— PRE-TRAIN SUMMARY —")
             print(pre_train_stats)
             print(pre_val_stats)
-            print("sample train rows:", pre_train_rows[:10])
-            print("sample val rows  :", pre_val_rows [:10])
+            #print("sample train rows:", pre_train_rows[:10])
+            #print("sample val rows  :", pre_val_rows [:10])
 
 
     import gc
@@ -831,8 +831,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         print("\n— POST-TRAIN SUMMARY —")
         print(post_train_stats)
         print(post_val_stats)
-        print("sample train rows:", post_train_rows[:10])
-        print("sample val rows  :", post_val_rows [:10])
+        #print("sample train rows:", post_train_rows[:10])
+        #print("sample val rows  :", post_val_rows [:10])
 
     
     
