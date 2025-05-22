@@ -243,8 +243,7 @@ class LastTokenDPOTrainer(DPOTrainer):
 
 
         DEBUG = True          # flip to False when done
-        if DEBUG:
-            import torch.nn.functional as F
+        if DEBUG:            
 
             # ---------- 1) shapes ------------------------------------------
             assert tok_ids.shape[1] == 1,  f"tok_ids len={tok_ids.shape[1]}"
