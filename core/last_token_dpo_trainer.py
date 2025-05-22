@@ -205,30 +205,50 @@ class LastTokenDPOTrainer(DPOTrainer):
         tok_attn[torch.arange(B), last_idx] = 1
 
         # 3) forward context under no-grad to get past_kv
+        # ---------------------------------------------------------------------
+        #  Build logical position indices that count only non-pad tokens
+        # ---------------------------------------------------------------------
+        seq_lens = attn.sum(1)                              # [B]  (# real prompt tokens)
+
+        # --- context positions ------------------------------------------------
+        # pos(i,j) = 0,1,2,… for the real tokens, 0 for left-pads
+        pos_ctx = torch.where(
+            ctx_attn,
+            (ctx_attn.cumsum(1) - 1),
+            torch.zeros_like(ctx_attn)
+        ).to(model.device)                                  # [B, L]
+
+        # --- token positions --------------------------------------------------
+        pos_tok = (seq_lens - 1).unsqueeze(1).to(model.device)  # [B, 1]
+
+        # ---------------------------------------------------------------------
+        # 1) CONTEXT PASS  (no grad, frozen kv)
+        # ---------------------------------------------------------------------
         with torch.no_grad():
             ctx_out = model(
                 ctx_ids,
-                attention_mask = ctx_attn,
+                attention_mask=ctx_attn,
+                position_ids   = pos_ctx,
                 use_cache      = True,
                 return_dict    = True,
             )
-        past_kv = ctx_out.past_key_values      # frozen constants
+        past_kv = ctx_out.past_key_values
 
-        # ------------------------------- last-token pass (fixed)
-        last_tok = ids.gather(                # shape [B, 1]
-            1, last_idx.unsqueeze(-1)
-        )                                     # simply [[c₀] …]
-        tok_ids  = last_tok                   # [B, 1]
-        tok_attn = torch.ones_like(tok_ids)   # [B, 1]
-        tok_out  = model(
-            tok_ids,
-            attention_mask=tok_attn,          # length = past_len + 1 internally
-            past_key_values=past_kv,
-            use_cache=False,
-            return_dict=True,
-        )                                     # logits.shape = [B, 1, V]
-        logits_last = tok_out.logits.squeeze(1)  # [B, V]
+        # ---------------------------------------------------------------------
+        # 2) LAST-PROMPT-TOKEN PASS  (grad on weights only)
+        # ---------------------------------------------------------------------
+        tok_out = model(
+            tok_ids,                            # shape [B, 1]
+            attention_mask = tok_attn,          # all ones
+            position_ids   = pos_tok,           # logical position = n-1
+            past_key_values= past_kv,
+            use_cache      = False,
+            return_dict    = True,
+        )
+
+        logits_last = tok_out.logits.squeeze(1)             # [B, V]
         logp_all    = F.log_softmax(logits_last, dim=-1)
+
 
         
 
