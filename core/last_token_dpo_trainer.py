@@ -193,20 +193,21 @@ class LastTokenDPOTrainer(DPOTrainer):
         #  Two-pass KV-cache: prompt frozen, last token trainable
         # ──────────────────────────────────────────────────────────────
         pad_id   = self.padding_value          # e.g. tokenizer.pad_token_id
-        B, L = ids.shape
         last_idx = attn.sum(1) - 1            # [B]  index of final real token
+        B, L = ids.shape
+        
 
         # ------------------------------------------------------------------
         #  Build logical position indices that ignore the left pads
         # ------------------------------------------------------------------
-        seq_len  = attn.sum(1)                        # [B]  (= n, the prompt length)
-        pad_off  = (L - seq_len).unsqueeze(1)         # [B,1] number of pads per row
+        seq_len  = attn.sum(1)                           # [B]  (= n)
+        pad_off  = (L - seq_len).unsqueeze(1)            # [B,1]
         arange_L = torch.arange(L, device=ids.device).unsqueeze(0)  # [1,L]
 
-        pos_ctx = (arange_L - pad_off).clamp(min=0)   # [-pads … n-2, n-1] → clip
-        pos_ctx = pos_ctx.masked_fill(attn == 0, 0)   # put 0s where attention_mask=0
+        pos_ctx = (arange_L - pad_off).clamp(min=0)      # [-pads … n-2,n-1]
+        pos_ctx = pos_ctx.masked_fill(attn == 0, 0)      # pads → 0
 
-        pos_tok = (seq_len - 1).unsqueeze(1)          # [B,1]  logical index n-1
+        pos_tok = (seq_len - 1).unsqueeze(1)             # [B,1]  value n-1
 
         # ----- 1) context-only pass  (no grad) -----------------------------
         ctx_ids  = ids.clone()
@@ -214,32 +215,32 @@ class LastTokenDPOTrainer(DPOTrainer):
         ctx_ids [torch.arange(B), last_idx] = pad_id        # mask away last tok
         ctx_attn[torch.arange(B), last_idx] = 0
 
+        # ------------- context (no-grad) -----------------
         with torch.no_grad():
             ctx_out = model(
                 ctx_ids,
                 attention_mask = ctx_attn,
-                position_ids   = pos_ctx,                   # logical positions!
+                position_ids   = pos_ctx,      # <-- new
                 use_cache      = True,
                 return_dict    = True,
             )
         past_kv = ctx_out.past_key_values
 
-        # ----- 2) last-token pass  (grad) ----------------------------------
-        tok_ids  = ids.gather(1, last_idx.unsqueeze(1))     # [B,1]
+        # ------------- last-token (grad) -----------------
+        tok_ids  = ids.gather(1, last_idx.unsqueeze(1))          # [B,1]
         tok_attn = torch.ones_like(tok_ids, dtype=attn.dtype)
-        pos_tok  = (last_idx).unsqueeze(1)                  # logical n-1
 
         tok_out = model(
             tok_ids,
             attention_mask = tok_attn,
-            position_ids   = pos_tok,
+            position_ids   = pos_tok,      # <-- new
             past_key_values= past_kv,
             use_cache      = False,
             return_dict    = True,
         )
 
-        logits_last = tok_out.logits.squeeze(1)             # [B, V]
-        logp_all    = F.log_softmax(logits_last, dim=-1)
+        logp_all = F.log_softmax(tok_out.logits.squeeze(1), dim=-1)   # [B,V]
+
 
 
         # ───────────────────────── DEBUG BLOCK ────────────────────────────
