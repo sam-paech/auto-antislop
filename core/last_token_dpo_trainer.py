@@ -190,7 +190,19 @@ class LastTokenDPOTrainer(DPOTrainer):
         # ──────────────────────────────────────────────────────────────
         pad_id   = self.padding_value          # e.g. tokenizer.pad_token_id
         B, L = ids.shape
-        last_idx = attn.sum(1) - 1                          # [B]
+        last_idx = attn.sum(1) - 1            # [B]  index of final real token
+
+        # ------------------------------------------------------------------
+        #  Build logical position indices that ignore the left pads
+        # ------------------------------------------------------------------
+        seq_len  = attn.sum(1)                        # [B]  (= n, the prompt length)
+        pad_off  = (L - seq_len).unsqueeze(1)         # [B,1] number of pads per row
+        arange_L = torch.arange(L, device=ids.device).unsqueeze(0)  # [1,L]
+
+        pos_ctx = (arange_L - pad_off).clamp(min=0)   # [-pads … n-2, n-1] → clip
+        pos_ctx = pos_ctx.masked_fill(attn == 0, 0)   # put 0s where attention_mask=0
+
+        pos_tok = (seq_len - 1).unsqueeze(1)          # [B,1]  logical index n-1
 
         # ----- 1) context-only pass  (no grad) -----------------------------
         ctx_ids  = ids.clone()
