@@ -247,7 +247,6 @@ class LastTokenDPOTrainer(DPOTrainer):
         DEBUG = True                         # flip to False when done
         if DEBUG and not getattr(self, "_debug_ran", False):
             self._debug_ran = True           # run only on first training batch
-            import torch.nn.functional as F
 
             # 1) shape sanity ------------------------------------------------
             assert tok_ids.shape[1] == 1,  f"tok_ids shape {tok_ids.shape}"
