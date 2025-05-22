@@ -224,7 +224,7 @@ class LastTokenDPOTrainer(DPOTrainer):
         )
 
         # logits for the final token (shape [B, V])
-        logits_last = tok_out.logits[torch.arange(B, device=model.device), last_idx]
+        logits_last = tok_out.logits[:, -1, :]
 
         # convert to log-probs for downstream loss code
         logp_all = F.log_softmax(logits_last, dim=-1)   # [B, V]
