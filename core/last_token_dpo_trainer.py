@@ -218,8 +218,10 @@ class LastTokenDPOTrainer(DPOTrainer):
                         print(f"  Decoded: '{decoded}'")
                         
                         # Also decode just the last token
-                        last_token_decoded = self.tokenizer.decode([ids[i, last_idx_i].item()])
-                        print(f"  Last token only: ID={ids[i, last_idx_i].item()} -> '{last_token_decoded}'")
+                        # Also decode just the last token (which is at position -1 with left padding)
+                        actual_last_token_id = ids[i, -1].item()
+                        last_token_decoded = self.tokenizer.decode([actual_last_token_id])
+                        print(f"  Last token only: ID={actual_last_token_id} -> '{last_token_decoded}'")
                         
 
         
