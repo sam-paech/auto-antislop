@@ -221,7 +221,7 @@ class LastTokenDPOTrainer(DPOTrainer):
                         last_token_decoded = self.tokenizer.decode([ids[i, last_idx_i].item()])
                         print(f"  Last token only: ID={ids[i, last_idx_i].item()} -> '{last_token_decoded}'")
                         
-                        
+
         
         # Position encoding setup
         pad_off  = (L - seq_len).unsqueeze(1)
@@ -238,12 +238,9 @@ class LastTokenDPOTrainer(DPOTrainer):
             return_dict=True,
         )
         
-        # Get logits at the last real position of each sequence
-        # These logits predict what token comes NEXT (after the prompt)
-        all_logits = outputs.logits                    # [B, L, V]
-        batch_indices = torch.arange(B, device=ids.device)
-        logits_last = all_logits[batch_indices, last_idx]  # [B, V]
-        logp_all = F.log_softmax(logits_last, dim=-1)     # [B, V]
+        # With left padding, the last token is always at position -1
+        logits_last = outputs.logits[:, -1, :]  # [B, V]
+        logp_all = F.log_softmax(logits_last, dim=-1)  # [B, V]
 
 
 
