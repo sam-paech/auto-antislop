@@ -174,25 +174,24 @@ class LastTokenDPOTrainer(DPOTrainer):
     #     "clip"  – odds-ratio clipping with ε
     # --------------------------------------------------------------------- #
     def compute_loss(self, model, inputs, return_outputs=False, **_):
-        mode = getattr(self, "loss_mode", "clip")   # set externally
-        eps  = getattr(self, "clip_eps", 0.2)       # only used in "clip"
-        beta = getattr(self, "beta", 0.1)           # reused everywhere
+        mode = getattr(self, "loss_mode", "clip")
+        eps  = getattr(self, "clip_eps", 0.2)
+        beta = getattr(self, "beta", 0.1)
 
         # ── unpack ---------------------------------------------------------
         ids   = inputs["prompt_ids"].to(model.device)      # [B,L]
         attn  = inputs["attention_mask"].to(model.device)  # [B,L]
         B, L  = ids.shape
-        pad_id = self.padding_value
-
-        # -------- logical position indices (ignore pads) ------------------
-        seq_len  = attn.sum(1)                         # [B]  (= n)
-        pad_off  = (L - seq_len).unsqueeze(1)          # [B,1]
-        arange_L = torch.arange(L, device=ids.device).unsqueeze(0)  # [1,L]
-
-        pos_full = (arange_L - pad_off).clamp(min=0)   # 0 … n-1, pads→0
+        
+        # Find the last real token position for each sequence
+        seq_len  = attn.sum(1)                         # [B] - number of real tokens
+        last_idx = seq_len - 1                         # [B] - last position index
+        
+        # Position encoding setup
+        pad_off  = (L - seq_len).unsqueeze(1)
+        arange_L = torch.arange(L, device=ids.device).unsqueeze(0)
+        pos_full = (arange_L - pad_off).clamp(min=0)
         pos_full = pos_full.masked_fill(attn == 0, 0)
-
-        last_idx = seq_len - 1                         # [B]
 
         # ------------- Single forward pass ---------------------------------
         outputs = model(
@@ -203,55 +202,53 @@ class LastTokenDPOTrainer(DPOTrainer):
             return_dict=True,
         )
         
-        # Extract logits only at the last position
-        logits_last = outputs.logits[torch.arange(B), last_idx]  # [B, V]
-        logp_all = F.log_softmax(logits_last, dim=-1)           # [B, V]
+        # Get logits at the last real position of each sequence
+        # These logits predict what token comes NEXT (after the prompt)
+        all_logits = outputs.logits                    # [B, L, V]
+        batch_indices = torch.arange(B, device=ids.device)
+        logits_last = all_logits[batch_indices, last_idx]  # [B, V]
+        logp_all = F.log_softmax(logits_last, dim=-1)     # [B, V]
+
+        # Continue with the rest of your loss computation...
 
         # ───────────────────────── DEBUG BLOCK ────────────────────────────
         # This block validates that our training loss computation matches validation
-        DEBUG = False
-        if DEBUG and not getattr(self, "_debug_ran", False):
-            self._debug_ran = True
-
-            # Since we're now doing single-pass, these should be identical
-            print(f"[DBG] Using single-pass approach - logits should match exactly")
-
-            batch_rows = torch.arange(ids.size(0), device=ids.device)
-            if "chosen_ids" in inputs:
-                ch_ids  = inputs["chosen_ids" ].to(ids.device)
-                ch_mask = inputs["chosen_mask"].to(ids.device)
-                rej     = inputs["rejected_token_id"].to(ids.device)
-                
-                # Check win rate using our loss computation approach
-                int_good = logp_all[batch_rows.unsqueeze(1), ch_ids]
-                int_bad  = logp_all[batch_rows, rej].unsqueeze(1)
-                wins_int = (int_good > int_bad) & ch_mask
-                int_win  = (wins_int.float().sum(-1) / ch_mask.sum(-1).clamp(min=1e-8)).mean().item()
-                
-                same_id = ((ch_ids == rej.unsqueeze(1)) & ch_mask).sum().item()
-            else:
-                ch_ids = inputs["chosen_token_id"].to(ids.device)
-                rej    = inputs["rejected_token_id"].to(ids.device)
-                
-                int_good = logp_all[batch_rows, ch_ids]
-                int_bad  = logp_all[batch_rows, rej]
-                int_win  = (int_good > int_bad).float().mean().item()
-                
-                same_id = (ch_ids == rej).sum().item()
-                
-            print(f"[DBG] choice_win = {int_win:.4f}")
-            if same_id: 
-                print(f"[WARN] {same_id} examples where chosen == rejected!")
-                
-            # Sample a few examples to inspect
-            for i in range(min(3, B)):
-                if "chosen_ids" in inputs:
-                    c_ids = ch_ids[i][ch_mask[i]].tolist()
-                    print(f"[DBG] Example {i}: chosen_ids={c_ids}, rejected={rej[i].item()}")
-                else:
-                    print(f"[DBG] Example {i}: chosen={ch_ids[i].item()}, rejected={rej[i].item()}")
+        DEBUG = True
+        if DEBUG:
+            # Add right after computing logp_all:
+            with torch.no_grad():
+                if not getattr(self, "_debug_check", False):
+                    self._debug_check = True
+                    print("\n[DEBUG] Checking logit extraction:")
+                    print(f"Batch size: {B}, Padded length: {L}")
                     
-            raise RuntimeError("Debug run complete – stopping trainer.")
+                    for i in range(min(3, B)):
+                        print(f"\nExample {i}:")
+                        print(f"  Sequence length: {seq_len[i].item()}")
+                        print(f"  Last index: {last_idx[i].item()}")
+                        print(f"  Last prompt token ID: {ids[i, last_idx[i]].item()}")
+                        
+                        # Get chosen/rejected
+                        if "chosen_ids" in inputs:
+                            ch_mask = inputs["chosen_mask"][i]
+                            chosen = inputs["chosen_ids"][i][ch_mask].tolist()
+                            rejected = inputs["rejected_token_id"][i].item()
+                            print(f"  Chosen IDs: {chosen}")
+                        else:
+                            chosen = [inputs["chosen_token_id"][i].item()]
+                            rejected = inputs["rejected_token_id"][i].item()
+                            print(f"  Chosen ID: {chosen[0]}")
+                        print(f"  Rejected ID: {rejected}")
+                        
+                        # Check probabilities
+                        probs = logp_all[i].exp()
+                        for c in chosen:
+                            print(f"  P(token {c}): {probs[c].item():.6f}")
+                        print(f"  P(token {rejected}): {probs[rejected].item():.6f}")
+                        
+                        # Are we even looking at reasonable probability mass?
+                        top5 = torch.topk(probs, 5)
+                        print(f"  Top 5 tokens: {top5.indices.tolist()} with probs {top5.values.tolist()}")
         # ────────────────────── END DEBUG BLOCK ───────────────────────────
 
         # Continue with your existing loss computation logic...
