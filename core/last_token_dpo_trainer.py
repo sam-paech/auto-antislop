@@ -182,6 +182,41 @@ class LastTokenDPOTrainer(DPOTrainer):
         ids   = inputs["prompt_ids"].to(model.device)      # [B,L]
         attn  = inputs["attention_mask"].to(model.device)  # [B,L]
         B, L  = ids.shape
+
+
+        # Add this debug right after getting ids and attn in compute_loss:
+        with torch.no_grad():
+            if not getattr(self, "_debug_tails", False):
+                self._debug_tails = True
+                print("\n[DEBUG] Checking last tokens of all prompts in batch:")
+                print(f"Batch size: {B}, Padded length: {L}")
+                print(f"Padding token ID: {self.padding_value}")
+                
+                for i in range(min(10, B)):  # Look at up to 10 examples
+                    seq_len_i = seq_len[i].item()
+                    last_idx_i = last_idx[i].item()
+                    
+                    # Get the last 20 tokens (or however many are available)
+                    num_to_show = min(20, seq_len_i)
+                    start_pos = L - seq_len_i  # Where real tokens start (after left padding)
+                    end_pos = L  # Where sequence ends
+                    
+                    # Extract the actual tokens
+                    last_tokens = ids[i, end_pos - num_to_show:end_pos].tolist()
+                    
+                    print(f"\nExample {i}:")
+                    print(f"  Seq length: {seq_len_i}, Last idx: {last_idx_i}")
+                    print(f"  Last {num_to_show} tokens: {last_tokens}")
+                    
+                    # Decode them if possible
+                    if hasattr(self, 'tokenizer'):
+                        decoded = self.tokenizer.decode(last_tokens)
+                        print(f"  Decoded: '{decoded}'")
+                        
+                        # Also decode just the last token
+                        last_token_decoded = self.tokenizer.decode([ids[i, last_idx_i].item()])
+                        print(f"  Last token only: ID={ids[i, last_idx_i].item()} -> '{last_token_decoded}'")
+                        
         
         # Find the last real token position for each sequence
         seq_len  = attn.sum(1)                         # [B] - number of real tokens
@@ -209,7 +244,7 @@ class LastTokenDPOTrainer(DPOTrainer):
         logits_last = all_logits[batch_indices, last_idx]  # [B, V]
         logp_all = F.log_softmax(logits_last, dim=-1)     # [B, V]
 
-        # Continue with the rest of your loss computation...
+
 
         # ───────────────────────── DEBUG BLOCK ────────────────────────────
         # This block validates that our training loss computation matches validation
