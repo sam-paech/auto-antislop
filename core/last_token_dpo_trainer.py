@@ -182,6 +182,10 @@ class LastTokenDPOTrainer(DPOTrainer):
         ids   = inputs["prompt_ids"].to(model.device)      # [B,L]
         attn  = inputs["attention_mask"].to(model.device)  # [B,L]
         B, L  = ids.shape
+        
+        # Find the last real token position for each sequence
+        seq_len  = attn.sum(1)                         # [B] - number of real tokens
+        last_idx = seq_len - 1                         # [B] - last position index
 
 
         # Add this debug right after getting ids and attn in compute_loss:
@@ -217,10 +221,7 @@ class LastTokenDPOTrainer(DPOTrainer):
                         last_token_decoded = self.tokenizer.decode([ids[i, last_idx_i].item()])
                         print(f"  Last token only: ID={ids[i, last_idx_i].item()} -> '{last_token_decoded}'")
                         
-        
-        # Find the last real token position for each sequence
-        seq_len  = attn.sum(1)                         # [B] - number of real tokens
-        last_idx = seq_len - 1                         # [B] - last position index
+                        
         
         # Position encoding setup
         pad_off  = (L - seq_len).unsqueeze(1)
