@@ -361,7 +361,7 @@ class LastTokenDPOTrainer(DPOTrainer):
                     ref_good = ref_logp_all.gather(
                         -1, chosen.unsqueeze(-1)
                     ).squeeze(-1)                                          # [B]
-
+ 
                 ref_bad = ref_logp_all.gather(
                     -1, rejected.unsqueeze(-1)
                 ).squeeze(-1)                                              # [B]
