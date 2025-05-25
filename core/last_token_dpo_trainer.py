@@ -410,6 +410,7 @@ class AGCTrainer(LastTokenDPOTrainer):
 
     # HF calls this right after .backward() and before optimizer.step()
     def clip_gradients(self, accelerator, model, max_grad_norm=None):
+        print('clipping grads')
         clip = self.agc_clip
         eps  = self.agc_eps
 
