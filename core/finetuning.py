@@ -189,7 +189,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     logger.info("Starting finetuning process...")
 
-    from core.last_token_dpo_trainer import LastTokenDPOTrainer, ThresholdStop, AGCTrainer
+    from core.last_token_dpo_trainer import LastTokenDPOTrainer, ThresholdStop, attach_agc
     
 
 
@@ -708,10 +708,12 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         print(f"Auto‑scaled LR (N={N}, w={w:.3f}) = {lr:.3e}")
 
 
+    if True or config["finetune_load_in_4bit"]:
+        attach_agc(model, clip=config.get("finetune_agc_clip", 0.01))
 
 
-    #TrainerClass = LastTokenDPOTrainer if mode.lower() in ["tdpo", "tdpo-multi"] else DPOTrainer
-    TrainerClass = AGCTrainer if mode.lower() in {"tdpo", "tdpo-multi"} else DPOTrainer
+    TrainerClass = LastTokenDPOTrainer if mode.lower() in ["tdpo", "tdpo-multi"] else DPOTrainer
+    #TrainerClass = AGCTrainer if mode.lower() in {"tdpo", "tdpo-multi"} else DPOTrainer
     if use_unsloth:
         optimiser_str = "adamw_8bit"
     else:        

@@ -1,5 +1,33 @@
 from core.finetuning import DPOTrainer, torch, pad_sequence, F
 
+# ---------------------------------------------------------------
+#  Add Adaptive Gradient Clipping to *every* parameter in-place
+# ---------------------------------------------------------------
+def attach_agc(model, clip: float = 0.01, eps: float = 1e-3):
+    """
+    Registers a per-parameter hook that applies Brock et al.’s
+    Adaptive Gradient Clipping:
+
+        ||g||₂ > clip * (||θ||₂ + eps)  →  g ← g * (threshold / ||g||₂)
+
+    Works with params in fp32, bf16, or bitsandbytes int4.
+    """
+
+    def _agc_hook(grad, param):
+        print('agc hook')
+        if grad is None:
+            return grad
+        param_norm = param.detach().norm()            # ||θ||
+        grad_norm  = grad.norm()                      # ||g||
+        max_norm   = clip * (param_norm + eps)
+        if grad_norm > max_norm:
+            grad = grad * (max_norm / (grad_norm + 1e-6))
+        return grad
+
+    for p in model.parameters():
+        if p.requires_grad:
+            p.register_hook(lambda g, p=p: _agc_hook(g, p))
+
 
 # ---------------------------------------------------------------------
 # Early-stopping on any logged scalar (loss, choice_win, etc.)
