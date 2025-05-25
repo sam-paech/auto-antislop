@@ -407,7 +407,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             )
 
         #model.config._attn_implementation = "eager"        # avoid flash-attn fp16 path
-        model.config._attn_implementation = "flash_attention_2"
+        #model.config._attn_implementation = "flash_attention_2"
         model.train()
 
         # 2. LoRA --------------------------------------------------------
@@ -745,7 +745,6 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             remove_unused_columns=False,
             disable_tqdm=False,
             max_grad_norm=1.0, # be nice to the baseline model
-            #agc_clip=config.get("finetune_agc_clip", 0.01),
         ),
     )
 
