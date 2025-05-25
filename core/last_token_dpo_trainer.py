@@ -14,7 +14,7 @@ def attach_agc(model, clip: float = 0.01, eps: float = 1e-3):
     """
 
     def _agc_hook(grad, param):
-        print('agc hook')
+        #print('agc hook')
         if grad is None:
             return grad
         param_norm = param.detach().norm()            # ||θ||
