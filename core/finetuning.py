@@ -730,7 +730,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             warmup_ratio=config['finetune_warmup_ratio'],
             num_train_epochs=config['finetune_num_epochs'],
             learning_rate=config['finetune_learning_rate'],
-            logging_steps=10,
+            logging_steps=5,
             optim=optimiser_str,
             seed=42,
             output_dir=str(finetune_output_dir),
