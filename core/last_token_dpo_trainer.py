@@ -88,34 +88,7 @@ class EarlyStoppingByMetric(TrainerCallback):
                 print(f"[EarlyStopping] '{self.monitor}' plateaued "
                       f"(best={self.best:.5f}) – stopping training.")
 
-class AGCCallback(TrainerCallback):
-    """
-    Adaptive Gradient Clipping (Brock et al. 2021).
-    Scales a gradient down iff  ||g||₂  >  clip * (||θ||₂ + ε).
-    The default clip=0.01 works for most Transformer finetunes.
-    """
-    def __init__(self, clip: float = 0.01, eps: float = 1e-3):
-        self.clip = clip
-        self.eps  = eps
 
-    def on_after_backward(self, args, state, control, **kwargs):
-        print('agc callback')
-        model = kwargs["model"]                       # same instance Trainer sees
-        clip  = self.clip
-        eps   = self.eps
-
-        for p in model.parameters():
-            if p.grad is None:                        # frozen or unused param
-                continue
-            param_norm = p.norm()                     # ||θ||
-            grad_norm  = p.grad.norm()                # ||g||
-            max_norm   = clip * (param_norm + eps)    # threshold
-
-            if grad_norm > max_norm:
-                scale = max_norm / (grad_norm + 1e-6)
-                p.grad.mul_(scale)
-
-        return control                                # keep Trainer happy
 
 class LastTokenDPOTrainer(DPOTrainer):
     """
@@ -426,3 +399,27 @@ class LastTokenDPOTrainer(DPOTrainer):
     # ----------------------------------------------------------
     def _prepare_dataset(self, dataset, *args, **_):
         return dataset
+    
+
+class AGCTrainer(LastTokenDPOTrainer):
+    def __init__(self, *args, agc_clip: float = 0.01, agc_eps: float = 1e-3,
+                 **kwargs):
+        super().__init__(*args, **kwargs)
+        self.agc_clip = agc_clip
+        self.agc_eps  = agc_eps
+
+    # HF calls this right after .backward() and before optimizer.step()
+    def clip_gradients(self, accelerator, model, max_grad_norm=None):
+        clip = self.agc_clip
+        eps  = self.agc_eps
+
+        for p in model.parameters():
+            if p.grad is None:
+                continue
+            # ||θ|| and ||g||
+            param_norm = p.detach().norm()
+            grad_norm  = p.grad.norm()
+
+            max_norm = clip * (param_norm + eps)
+            if grad_norm > max_norm:
+                p.grad.mul_(max_norm / (grad_norm + 1e-6))
