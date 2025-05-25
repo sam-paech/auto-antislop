@@ -379,7 +379,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             logger.error(f"Failed to load base model '{model_name}' or tokenizer for DPO: {e}", exc_info=True)
             return
     else:
-        from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+        from transformers import BitsAndBytesConfig
         from peft import LoraConfig, get_peft_model
         import torch
 
@@ -407,7 +407,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             )
 
         #model.config._attn_implementation = "eager"        # avoid flash-attn fp16 path
-        #model.config._attn_implementation = "flash_attention_2"
+        model.config._attn_implementation = "flash_attention_2"
         model.train()
 
         # 2. LoRA --------------------------------------------------------
