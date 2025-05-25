@@ -742,7 +742,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             fp16=use_fp16, # Ensure only one is true or both false
             remove_unused_columns=False,
             disable_tqdm=False,
-            #max_grad_norm=0.5, # be nice to the baseline model
+            max_grad_norm=1.0, # be nice to the baseline model
             #agc_clip=config.get("finetune_agc_clip", 0.01),
         ),
     )
