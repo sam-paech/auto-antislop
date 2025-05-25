@@ -7,7 +7,7 @@ log_level: "INFO"
 
 # --- vLLM Server Management (if --manage-vllm is True) ---
 manage_vllm: true
-vllm_model_id: "unsloth/gemma-3-27b-it" # Model served by vLLM
+vllm_model_id: "unsloth/gemma-3-4b-it" # Model served by vLLM
 vllm_port: 8000
 vllm_hf_token: null # Optional: Your Hugging Face token if model is gated
 vllm_cuda_visible_devices: "0"  # set to e.g. "0,1,2,3" for multiple gpus
@@ -30,7 +30,7 @@ generation_step_enabled: true
 # If you set manage_vllm=true, leave the base url unset
 #generation_api_base_url: "http://localhost:8000/v1"
 #generation_api_base_url: "https://apjmbtwbrb8t61-8888.proxy.runpod.net/v1"
-generation_model_id: "unsloth/gemma-3-27b-it" # Model name for generation requests
+generation_model_id: "unsloth/gemma-3-4b-it" # Model name for generation requests
 generation_api_key: "xxx" # API key for the vLLM server
 generation_max_new_tokens: 2000
 generation_threads: 50 # Number of parallel threads for API queries in antislop-vllm. Note: vllm can become very inefficient if you go over some concurrency threshold (depending on vram)
@@ -41,7 +41,7 @@ generation_logging_level: 'INFO' # Logging level for antislop-vllm script
 
 # A huggingface model id or local dir containing the tokeniser you want to use to apply chat templates.
 # This is important if you are generating a tdpo dataset for later training.
-generation_chat_template_model_id: "unsloth/gemma-3-27b-it" 
+generation_chat_template_model_id: "unsloth/gemma-3-4b-it" 
 
 # Parameters for antislop-vllm's generation_params (passed as individual CLI args)
 generation_param_chunk_size: 20
@@ -115,17 +115,17 @@ top_n_subsequent_slop_ban: 100 # New slop phrases from slop-forensics to ban in 
 # User-supplied extra slop phrases to always ban (processed by auto-antislop)
 extra_slop_phrases_to_ban: [
   # "testament to",
-  "…", "*", " –", "–", "#",
+  #"…", "*", " –", "–", "#",
 ]
 
 # --- Regex Banning (within auto-antislop, passed to antislop-vllm) ---
 # User-supplied regex patterns to ban
 extra_regex_patterns: [
     # These ones ban "it's not x, it's y" type patterns:
-    "\\bnot\\s+(?:just|only|merely)?\\s*(?:(?!but\\b|[.?!]).){1,50}?[,;:—–-]?\\s*but\\s+(?:also\\s+)?",
-    "\\bnot\\s+only\\s+(?:(?!but\\b|[.?!]).){1,50}?[,;:—–-]?\\s*but\\s+also\\s+",
-    "\\bit'?s\\s+not\\s+(?:just|only|merely)?\\s*(?:(?!it'?s\\b|[.?!]).){1,50}?[,;:—–-]\\s*it'?s\\s+",
-    "\\b(?:(?!is\\b|[.?!]).){1,50}?is\\s+not\\s+(?:just\\s+|only\\s+)?(?:about\\s+)?(?:(?!it'?s\\b|[.?!]).){1,50}?[,;:—–-]\\s*it'?s\\s+(?:about\\s+)?"
+    #"\\bnot\\s+(?:just|only|merely)?\\s*(?:(?!but\\b|[.?!]).){1,50}?[,;:—–-]?\\s*but\\s+(?:also\\s+)?",
+    #"\\bnot\\s+only\\s+(?:(?!but\\b|[.?!]).){1,50}?[,;:—–-]?\\s*but\\s+also\\s+",
+    #"\\bit'?s\\s+not\\s+(?:just|only|merely)?\\s*(?:(?!it'?s\\b|[.?!]).){1,50}?[,;:—–-]\\s*it'?s\\s+",
+    #"\\b(?:(?!is\\b|[.?!]).){1,50}?is\\s+not\\s+(?:just\\s+|only\\s+)?(?:about\\s+)?(?:(?!it'?s\\b|[.?!]).){1,50}?[,;:—–-]\\s*it'?s\\s+(?:about\\s+)?"
 ]
 
 # --- Metrics ---
@@ -138,7 +138,7 @@ finetune_enabled: true
 finetune_use_unsloth: false
 finetune_mode: "tdpo-multi" # dpo / tdpo (tokenwise-dpo)
 finetune_tdpo_dataset: "" # you can specify an existing tdpo dataset, or let the pipeline use the one produced in the generation step
-finetune_base_model_id: "unsloth/gemma-3-27b-it" # Base model for DPO
+finetune_base_model_id: "unsloth/gemma-3-4b-it" # Base model for DPO
 finetune_max_seq_length: 1500 # this may truncate some outputs
 finetune_load_in_4bit: false # qlora
 finetune_early_stopping_wins: 0.8 # Early stopping threshold for fraction of *chosen* completions that are selected over *rejected*. More than 0.75 may be overtrained.
