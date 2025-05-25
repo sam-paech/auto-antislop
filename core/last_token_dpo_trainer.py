@@ -99,6 +99,7 @@ class AGCCallback(TrainerCallback):
         self.eps  = eps
 
     def on_after_backward(self, args, state, control, **kwargs):
+        print('agc callback')
         model = kwargs["model"]                       # same instance Trainer sees
         clip  = self.clip
         eps   = self.eps
