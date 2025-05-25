@@ -348,14 +348,19 @@ class LastTokenDPOTrainer(DPOTrainer):
             freeze_frac    = freeze_mask.float().mean()                # how much of V is KL-regularised
             kl_pref_ratio  = kl_loss / (pref_loss + 1e-8)              # relative weight of KL vs pref
 
-            # these get merged into the normal metrics dict later
+            # ── diagnostic ratios ─────────────────────────────────────────────
+            lambda_kl           = 0.02                                         # <-- keep in sync with the line in `loss = ...`
+            kl_pref_ratio_raw   = kl_loss / (pref_loss + 1e-8)                 # un-scaled
+            kl_pref_ratio       = lambda_kl * kl_pref_ratio_raw                # effective share in total loss
+
             extra_metrics = {
-                "kl_loss"        : kl_loss.detach(),
-                "freeze_frac"    : freeze_frac.detach(),
-                "kl_pref_ratio"  : kl_pref_ratio.detach(),
+                "kl_loss"            : kl_loss.detach(),        # un-scaled
+                "freeze_frac"        : freeze_frac.detach(),
+                "kl_pref_ratio_raw"  : kl_pref_ratio_raw.detach(),
+                "kl_pref_ratio"      : kl_pref_ratio.detach(),  # scaled (what actually matters)
             }
 
-            loss = pref_loss + 0.02 * kl_loss                           # λ≈0.02 usually enough
+            loss = pref_loss + lambda_kl * kl_loss                           # λ≈0.02 usually enough
 
         else:
             loss = pref_loss
