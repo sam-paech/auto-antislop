@@ -306,7 +306,7 @@ class LastTokenDPOTrainer(DPOTrainer):
                 pref_loss = -F.logsigmoid(beta * delta).mean()
 
 
-
+        extra_metrics = {}
         # ── total loss & metrics ------------------------------------------
         if USE_KL_LOSS:
             # applies kl loss to every logit *except* those in chosen/rejected.
