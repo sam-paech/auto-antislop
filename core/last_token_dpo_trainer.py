@@ -386,8 +386,8 @@ class LastTokenDPOTrainer(DPOTrainer):
         }
         self.store_metrics(metrics, train_eval="train")
 
-        self.log({f"train/{k}": (v if not torch.is_tensor(v) else v.cpu().float().item())
-          for k, v in extra_metrics.items()})
+        #self.log({f"train/{k}": (v if not torch.is_tensor(v) else v.cpu().float().item())
+        #  for k, v in extra_metrics.items()})
 
         if return_outputs:
             return loss, metrics
