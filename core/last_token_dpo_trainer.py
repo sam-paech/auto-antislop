@@ -349,7 +349,7 @@ class LastTokenDPOTrainer(DPOTrainer):
             kl_pref_ratio  = kl_loss / (pref_loss + 1e-8)              # relative weight of KL vs pref
 
             # ── diagnostic ratios ─────────────────────────────────────────────
-            lambda_kl           = 0.02                                         # <-- keep in sync with the line in `loss = ...`
+            lambda_kl           = 0.1                                        # <-- keep in sync with the line in `loss = ...`
             kl_pref_ratio_raw   = kl_loss / (pref_loss + 1e-8)                 # un-scaled
             kl_pref_ratio       = lambda_kl * kl_pref_ratio_raw                # effective share in total loss
 
