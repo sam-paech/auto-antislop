@@ -291,7 +291,10 @@ class LastTokenDPOTrainer(DPOTrainer):
             # --- unpack ----------------------------------------------------------------
             ch_ids  = inputs["chosen_ids"].to(model.device)       # [B,C]
             ch_mask = inputs["chosen_mask"].to(model.device)      # [B,C] bool
+            
+            # --- rejected token ---------------------------------------------------------
             rej     = inputs["rejected_token_id"].to(model.device)  # [B]
+            logp_bad = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)  # [B]
 
             # --- per-token log-p and p --------------------------------------------------
             batch_rows = torch.arange(B, device=logp_all.device).unsqueeze(1)
@@ -322,8 +325,7 @@ class LastTokenDPOTrainer(DPOTrainer):
             logp_good          = weighted_mean_prob.log().squeeze(-1)      # [B]
 
 
-            # --- rejected token ---------------------------------------------------------
-            logp_bad = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)  # [B]
+            
 
         else:
             # single-token path
