@@ -485,7 +485,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         sum(p.numel() for p in model.parameters() if p.requires_grad))
 
 
-    CALC_VAL_STATS = True
+    CALC_VAL_STATS = False
     N_VAL_ITEMS = 50
     if CALC_VAL_STATS:
         def _collate_tdpo(features, pad_id: int, max_len: int):
