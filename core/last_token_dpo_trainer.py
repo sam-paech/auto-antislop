@@ -378,7 +378,7 @@ class LastTokenDPOTrainer(DPOTrainer):
             kl_pref_ratio  = kl_loss / (pref_loss + 1e-8)              # relative weight of KL vs pref
 
             # ── diagnostic ratios ─────────────────────────────────────────────
-            lambda_kl           = 0.1                                        # <-- keep in sync with the line in `loss = ...`
+            lambda_kl           = 0.02                                        # <-- keep in sync with the line in `loss = ...`
             pref_eps            = 1e-4          # or smaller if you like
             safe_pref_loss      = torch.clamp(pref_loss.detach(), min=pref_eps)
 
