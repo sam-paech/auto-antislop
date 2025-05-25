@@ -316,10 +316,23 @@ class LastTokenDPOTrainer(DPOTrainer):
                 freeze_mask.scatter_(1, chosen.unsqueeze(-1), False)
             freeze_mask.scatter_(1, rej.unsqueeze(-1), False)
 
-            kl_part = (freeze_mask * ref_logp_all.exp()
-                                    * (ref_logp_all - logp_all)).sum()
-            kl_loss = kl_part / freeze_mask.sum()
-            loss = pref_loss + 0.02 * kl_loss                  # λ≈0.02 usually enough
+            kl_part  = (freeze_mask * ref_logp_all.exp()
+                                        * (ref_logp_all - logp_all)).sum()
+            kl_loss  = kl_part / freeze_mask.sum()
+
+            # ── extra diagnostics ─────────────────────────────────────────────
+            freeze_frac    = freeze_mask.float().mean()                # how much of V is KL-regularised
+            kl_pref_ratio  = kl_loss / (pref_loss + 1e-8)              # relative weight of KL vs pref
+
+            # these get merged into the normal metrics dict later
+            extra_metrics = {
+                "kl_loss"        : kl_loss.detach(),
+                "freeze_frac"    : freeze_frac.detach(),
+                "kl_pref_ratio"  : kl_pref_ratio.detach(),
+            }
+
+            loss = pref_loss + 0.02 * kl_loss                           # λ≈0.02 usually enough
+
         else:
             loss = pref_loss
 
@@ -338,6 +351,7 @@ class LastTokenDPOTrainer(DPOTrainer):
         metrics = {
             "pref_loss":  pref_loss.detach(),
             "choice_win": choice_win,
+            **extra_metrics,
         }
         self.store_metrics(metrics, train_eval="train")
 
