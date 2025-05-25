@@ -175,8 +175,12 @@ class LastTokenDPOTrainer(DPOTrainer):
     # --------------------------------------------------------------------- #
     def compute_loss(self, model, inputs, return_outputs=False, **_):
         mode = getattr(self, "loss_mode", "clip")
-        eps  = getattr(self, "clip_eps", 0.2)
+        clip_epsilon_probs  = getattr(self, "clip_epsilon_probs", 0.2)
+        clip_epsilon_logits  = getattr(self, "clip_epsilon_logits", 2)
         beta = getattr(self, "beta", 0.1)
+
+        MARGIN_CALC_MODE="logits" # probs / logits. Use probs or logits in the loss function. logits is more surgical (doesn't affect the whole logit distribution).
+        USE_KL_LOSS=True # tether all the logits other than the ones we are interested in moving to the reference
 
         # ── unpack ---------------------------------------------------------
         ids   = inputs["prompt_ids"].to(model.device)      # [B,L]
@@ -296,11 +300,6 @@ class LastTokenDPOTrainer(DPOTrainer):
             rej     = inputs["rejected_token_id"].to(model.device)  # [B]
             logp_bad = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)  # [B]
 
-            # --- per-token log-p and p --------------------------------------------------
-            batch_rows = torch.arange(B, device=logp_all.device).unsqueeze(1)
-            gathered   = logp_all[batch_rows, ch_ids]        # [B, C]  log p(chosen_i)
-            probs_good = gathered.exp()                      # p(chosen_i)  ∈ (0,1)
-            prob_bad   = logp_bad.unsqueeze(-1).exp()        # [B, 1]  broadcast
 
             # ---------------------------------------------------------------------------
             #  Weight rule
@@ -309,9 +308,24 @@ class LastTokenDPOTrainer(DPOTrainer):
             #     • if margin ≤ −ε or large loss → weight = 1
             #     • otherwise                    → linear taper  (ε − margin) / ε
             # ---------------------------------------------------------------------------
-            margin   = probs_good - prob_bad                 # [B, C]
-            weights  = torch.clamp((eps - margin) / eps,
-                                min=0.0, max=1.0) * ch_mask
+            batch_rows = torch.arange(B, device=logp_all.device).unsqueeze(1)
+            
+            if MARGIN_CALC_MODE == "probs":
+                gathered      = logp_all[batch_rows, ch_ids]      # log-p
+                probs_good    = gathered.exp()
+                prob_bad      = logp_bad.unsqueeze(-1).exp()
+                margin        = probs_good - prob_bad                
+                weights = torch.clamp((clip_epsilon_probs - margin) / clip_epsilon_probs, 0.0, 1.0) * ch_mask
+            else:   # "logits"
+                gathered      = logits_last[batch_rows, ch_ids]   # raw logits
+                logit_bad     = logits_last.gather(-1, rej.unsqueeze(-1))
+                margin        = gathered - logit_bad
+                # need probs_good for the weighted mean later
+                logZ          = logits_last.logsumexp(-1, keepdim=True)
+                probs_good    = (gathered - logZ).exp()
+                weights = torch.clamp((clip_epsilon_logits - margin) / clip_epsilon_logits, 0.0, 1.0) * ch_mask
+
+            
 
             # fall-back: if *all* weights in a row are zero, keep every chosen token
             zero_row = weights.sum(dim=-1, keepdim=True) < 1e-12
@@ -337,72 +351,61 @@ class LastTokenDPOTrainer(DPOTrainer):
         # ───────────────────────────────────────────────────────────────────
         #  Variant-specific preference term
         # ───────────────────────────────────────────────────────────────────
-        if mode == "ref":
-            # ── reference pass (no grads) ─────────────────────────────────────
+        if mode == "clip":
+            # PPO-style odds-ratio clipping
+            delta  = logp_good - logp_bad                 # log-odds
+            #ratio  = torch.exp(delta)                     # odds ratio
+            #clipped = torch.minimum(ratio, torch.tensor(1.0 + eps, device=ratio.device))
+            #pref_loss = -torch.log(clipped / (1.0 + eps)).mean()
+
+            eps = clip_epsilon_logits if MARGIN_CALC_MODE == "logits" else clip_epsilon_probs
+            ratio = torch.exp(delta)
+            clipped = torch.minimum(ratio, torch.tensor(1.0 + eps, device=ratio.device))
+            pref_loss = -torch.log(clipped / (1.0 + eps)).mean()
+
+        else:  # "free"
+            delta = logp_good - logp_bad
+            pref_loss = -F.logsigmoid(beta * delta).mean()
+
+        # ── total loss & metrics ------------------------------------------
+        if USE_KL_LOSS:
+            # applies kl loss to every logit *except* those in chosen/rejected.
+            # this allows our target logits to move freely while constraining weight updates globally
             with torch.no_grad():
-                if self.ref_model is None:
-                    # fall back to the "frozen copy of self" context manager
+                if self.ref_model is None:                  # fallback: freeze self
                     with self.null_ref_context():
-                        ref_out = model(
+                        ref_logits_last = model(
                             ids,
                             attention_mask=attn,
                             position_ids=pos_full,
                             use_cache=False,
                             return_dict=True,
-                        )
+                        ).logits[:, -1, :]                  # [B, V]
                 else:
-                    ref_out = self.ref_model(
+                    ref_logits_last = self.ref_model(
                         ids,
                         attention_mask=attn,
                         position_ids=pos_full,
                         use_cache=False,
                         return_dict=True,
-                    )
+                    ).logits[:, -1, :]                      # [B, V]
 
-                # final-token logits → log-probs
-                ref_logits_last = ref_out.logits[torch.arange(B), last_idx]    # [B,V]
-                ref_logp_all    = F.log_softmax(ref_logits_last, dim=-1)
+            ref_logp_all = F.log_softmax(ref_logits_last, dim=-1)
 
-                if inputs.get("chosen_ids") is not None:
-                    # multi-winner branch
-                    ref_gathered = ref_logp_all.gather(-1, ch_ids)         # [B,C]
-                    ref_probs    = ref_gathered.exp()
-                    ref_weights  = torch.clamp((eps - ref_probs) / eps, min=0.0) * ch_mask
-                    zero_row     = ref_weights.sum(dim=-1, keepdim=True) < 1e-12
-                    ref_weights  = torch.where(zero_row, ch_mask.float(), ref_weights)
-                    ref_wsum     = ref_weights.sum(dim=-1, keepdim=True)
-                    ref_mean_p   = (ref_probs * ref_weights).sum(dim=-1, keepdim=True) / ref_wsum
-                    ref_good     = ref_mean_p.log().squeeze(-1)            # [B]
-                else:
-                    # single-token branch
-                    ref_good = ref_logp_all.gather(
-                        -1, chosen.unsqueeze(-1)
-                    ).squeeze(-1)                                          # [B]
- 
-                ref_bad = ref_logp_all.gather(
-                    -1, rejected.unsqueeze(-1)
-                ).squeeze(-1)                                              # [B]
+            # Build mask once per batch
+            freeze_mask = torch.ones_like(logp_all, dtype=torch.bool)
+            if "chosen_ids" in inputs:
+                freeze_mask.scatter_(1, ch_ids, False)
+            else:
+                freeze_mask.scatter_(1, chosen.unsqueeze(-1), False)
+            freeze_mask.scatter_(1, rej.unsqueeze(-1), False)
 
-            # ── preference loss using reference offset ─────────────────────
-            delta     = (logp_good - ref_good) - (logp_bad - ref_bad)
-            pref_loss = -F.logsigmoid(beta * delta).mean()
-            kl_loss   = 0.0  # prompt-KL off for now
-
-        elif mode == "clip":
-            # PPO-style odds-ratio clipping
-            delta  = logp_good - logp_bad                 # log-odds
-            ratio  = torch.exp(delta)                     # odds ratio
-            clipped = torch.minimum(ratio, torch.tensor(1.0 + eps, device=ratio.device))
-            pref_loss = -torch.log(clipped / (1.0 + eps)).mean()
-            kl_loss   = 0.0
-
-        else:  # "free"
-            delta = logp_good - logp_bad
-            pref_loss = -F.logsigmoid(beta * delta).mean()
-            kl_loss   = 0.0
-
-        # ── total loss & metrics ------------------------------------------
-        loss = pref_loss + kl_loss
+            kl_part = (freeze_mask * ref_logp_all.exp()
+                                    * (ref_logp_all - logp_all)).sum()
+            kl_loss = kl_part / freeze_mask.sum()
+            loss = pref_loss + 0.02 * kl_loss                  # λ≈0.02 usually enough
+        else:
+            loss = pref_loss
 
         if inputs.get("chosen_ids") is not None:        # TDPO-MULTI
             # log-probs for each chosen token, same shape as ch_ids
@@ -414,7 +417,7 @@ class LastTokenDPOTrainer(DPOTrainer):
             frac_win  = wins_tok.float().sum(-1) / ch_mask.sum(-1).clamp(min=1e-8)  # [B]
             choice_win = frac_win.mean().detach()                 # scalar
         else:                                        # TDPO single
-            choice_win = (logp_good > logp_bad).float().mean().detach()
+            choice_win = (logp_good > logp_bad).float().mean().detach()        
 
         metrics = {
             "pref_loss":  pref_loss.detach(),
