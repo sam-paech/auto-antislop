@@ -759,7 +759,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                         higher_is_better=False)
         )
 
-    if config["finetune_load_in_4bit"]:
+    if True or config["finetune_load_in_4bit"]:
         # attempt to avoid inf/nans when using 4bit quant
         agc_clip = config.get("finetune_agc_clip", 0.01)      # make it tunable
         dpo_trainer.add_callback(AGCCallback(clip=agc_clip))
