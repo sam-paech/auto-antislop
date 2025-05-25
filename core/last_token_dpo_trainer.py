@@ -209,7 +209,7 @@ class LastTokenDPOTrainer(DPOTrainer):
         beta = getattr(self, "beta", 0.1)
 
         LOSS_CALC_MODE = getattr(self, "loss_calc_mode", "logits")    # probs / logits. Use probs or logits in the loss function. logits is more surgical (doesn't affect the whole logit distribution).
-        USE_KL_LOSS=False # tether all the logits other than the ones we are interested in moving to the reference
+        USE_KL_LOSS=True # tether all the logits other than the ones we are interested in moving to the reference
 
         # ── unpack ---------------------------------------------------------
         ids   = inputs["prompt_ids"].to(model.device)      # [B,L]
