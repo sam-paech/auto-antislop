@@ -350,13 +350,15 @@ class LastTokenDPOTrainer(DPOTrainer):
 
             # ── diagnostic ratios ─────────────────────────────────────────────
             lambda_kl           = 0.1                                        # <-- keep in sync with the line in `loss = ...`
-            kl_pref_ratio_raw   = kl_loss / (pref_loss + 1e-8)                 # un-scaled
-            kl_pref_ratio       = lambda_kl * kl_pref_ratio_raw                # effective share in total loss
+            pref_eps            = 1e-4          # or smaller if you like
+            safe_pref_loss      = torch.clamp(pref_loss.detach(), min=pref_eps)
+
+            kl_pref_ratio_raw   = kl_loss / safe_pref_loss
+            kl_pref_ratio       = lambda_kl * kl_pref_ratio_raw
 
             extra_metrics = {
                 "kl_loss"            : kl_loss.detach(),        # un-scaled
                 "freeze_frac"        : freeze_frac.detach(),
-                "kl_pref_ratio_raw"  : kl_pref_ratio_raw.detach(),
                 "kl_pref_ratio"      : kl_pref_ratio.detach(),  # scaled (what actually matters)
             }
 

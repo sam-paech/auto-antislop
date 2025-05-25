@@ -140,7 +140,7 @@ finetune_mode: "tdpo-multi" # dpo / tdpo (tokenwise-dpo)
 finetune_tdpo_dataset: "" # you can specify an existing tdpo dataset, or let the pipeline use the one produced in the generation step
 finetune_base_model_id: "THUDM/GLM-4-32B-0414" # Base model for DPO
 finetune_max_seq_length: 1500 # this may truncate some outputs
-finetune_load_in_4bit: true # qlora
+finetune_load_in_4bit: false # qlora
 finetune_early_stopping_wins: 0.8 # Early stopping threshold for fraction of *chosen* completions that are selected over *rejected*. More than 0.75 may be overtrained.
 finetune_early_stopping_loss: null # Loss threshold for early stopping. Set to null to disable.
 finetune_lora_r: 8
