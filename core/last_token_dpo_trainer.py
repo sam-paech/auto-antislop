@@ -189,46 +189,7 @@ class LastTokenDPOTrainer(DPOTrainer):
         
         # Find the last real token position for each sequence
         seq_len  = attn.sum(1)                         # [B] - number of real tokens
-        last_idx = seq_len - 1                         # [B] - last position index
 
-
-        # Add this debug right after getting ids and attn in compute_loss:
-        with torch.no_grad():
-            if not getattr(self, "_debug_tails", False):
-                self._debug_tails = True
-                print("\n[DEBUG] Checking last tokens of all prompts in batch:")
-                print(f"Batch size: {B}, Padded length: {L}")
-                print(f"Padding token ID: {self.padding_value}")
-                
-                for i in range(min(10, B)):  # Look at up to 10 examples
-                    seq_len_i = seq_len[i].item()
-                    last_idx_i = last_idx[i].item()
-                    
-                    # Get the last 20 tokens (or however many are available)
-                    num_to_show = min(20, seq_len_i)
-                    start_pos = L - seq_len_i  # Where real tokens start (after left padding)
-                    end_pos = L  # Where sequence ends
-                    
-                    # Extract the actual tokens
-                    last_tokens = ids[i, end_pos - num_to_show:end_pos].tolist()
-                    
-                    print(f"\nExample {i}:")
-                    print(f"  Seq length: {seq_len_i}, Last idx: {last_idx_i}")
-                    print(f"  Last {num_to_show} tokens: {last_tokens}")
-                    
-                    # Decode them if possible
-                    if hasattr(self, 'tokenizer'):
-                        decoded = self.tokenizer.decode(last_tokens)
-                        print(f"  Decoded: '{decoded}'")
-                        
-                        # Also decode just the last token
-                        # Also decode just the last token (which is at position -1 with left padding)
-                        actual_last_token_id = ids[i, -1].item()
-                        last_token_decoded = self.tokenizer.decode([actual_last_token_id])
-                        print(f"  Last token only: ID={actual_last_token_id} -> '{last_token_decoded}'")
-                        
-
-        
         # Position encoding setup
         pad_off  = (L - seq_len).unsqueeze(1)
         arange_L = torch.arange(L, device=ids.device).unsqueeze(0)
@@ -249,49 +210,7 @@ class LastTokenDPOTrainer(DPOTrainer):
         logp_all = F.log_softmax(logits_last, dim=-1)  # [B, V]
 
 
-
-        # ───────────────────────── DEBUG BLOCK ────────────────────────────
-        # This block validates that our training loss computation matches validation
-        DEBUG = True
-        if DEBUG:
-            # Add right after computing logp_all:
-            with torch.no_grad():
-                if not getattr(self, "_debug_check", False):
-                    self._debug_check = True
-                    print("\n[DEBUG] Checking logit extraction:")
-                    print(f"Batch size: {B}, Padded length: {L}")
-                    
-                    for i in range(min(3, B)):
-                        print(f"\nExample {i}:")
-                        print(f"  Sequence length: {seq_len[i].item()}")
-                        print(f"  Last index: {last_idx[i].item()}")
-                        print(f"  Last prompt token ID: {ids[i, last_idx[i]].item()}")
-                        
-                        # Get chosen/rejected
-                        if "chosen_ids" in inputs:
-                            ch_mask = inputs["chosen_mask"][i]
-                            chosen = inputs["chosen_ids"][i][ch_mask].tolist()
-                            rejected = inputs["rejected_token_id"][i].item()
-                            print(f"  Chosen IDs: {chosen}")
-                        else:
-                            chosen = [inputs["chosen_token_id"][i].item()]
-                            rejected = inputs["rejected_token_id"][i].item()
-                            print(f"  Chosen ID: {chosen[0]}")
-                        print(f"  Rejected ID: {rejected}")
-                        
-                        # Check probabilities
-                        probs = logp_all[i].exp()
-                        for c in chosen:
-                            print(f"  P(token {c}): {probs[c].item():.6f}")
-                        print(f"  P(token {rejected}): {probs[rejected].item():.6f}")
-                        
-                        # Are we even looking at reasonable probability mass?
-                        top5 = torch.topk(probs, 5)
-                        print(f"  Top 5 tokens: {top5.indices.tolist()} with probs {top5.values.tolist()}")
-        # ────────────────────── END DEBUG BLOCK ───────────────────────────
-
-        # Continue with your existing loss computation logic...
-        if inputs.get("chosen_ids") is not None:
+        if inputs.get("chosen_ids") is not None: # tdpo-multi path
             # --- unpack ----------------------------------------------------------------
             ch_ids  = inputs["chosen_ids"].to(model.device)       # [B,C]
             ch_mask = inputs["chosen_mask"].to(model.device)      # [B,C] bool
@@ -337,9 +256,6 @@ class LastTokenDPOTrainer(DPOTrainer):
             weights_sum        = weights.sum(dim=-1, keepdim=True)
             weighted_mean_prob = (probs_good * weights).sum(dim=-1, keepdim=True) / weights_sum
             logp_good          = weighted_mean_prob.log().squeeze(-1)      # [B]
-
-
-            
 
         else:
             # single-token path
