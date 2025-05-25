@@ -295,17 +295,32 @@ class LastTokenDPOTrainer(DPOTrainer):
 
             # --- per-token log-p and p --------------------------------------------------
             batch_rows = torch.arange(B, device=logp_all.device).unsqueeze(1)
-            gathered   = logp_all[batch_rows, ch_ids]           # [B, C]
-            probs     = gathered.exp()                          # p_i
+            gathered   = logp_all[batch_rows, ch_ids]        # [B, C]  log p(chosen_i)
+            probs_good = gathered.exp()                      # p(chosen_i)  ∈ (0,1)
+            prob_bad   = logp_bad.unsqueeze(-1).exp()        # [B, 1]  broadcast
 
-            # --- soft weight: 1 at p≤eps, linear decay to 0 at p≥1 ----------------------
-            weights  = torch.clamp((eps - probs) / eps, min=0.0) * ch_mask
-            zero_row = weights.sum(dim=-1, keepdim=True) < 1e-12  # all weights zero?
+            # ---------------------------------------------------------------------------
+            #  Weight rule
+            #     • margin = p(chosen) − p(rejected)
+            #     • if margin ≥ ε                → weight = 0
+            #     • if margin ≤ −ε or large loss → weight = 1
+            #     • otherwise                    → linear taper  (ε − margin) / ε
+            # ---------------------------------------------------------------------------
+            margin   = probs_good - prob_bad                 # [B, C]
+            weights  = torch.clamp((eps - margin) / eps,
+                                min=0.0, max=1.0) * ch_mask
+
+            # fall-back: if *all* weights in a row are zero, keep every chosen token
+            zero_row = weights.sum(dim=-1, keepdim=True) < 1e-12
             weights  = torch.where(zero_row, ch_mask.float(), weights)
 
-            weights_sum        = weights.sum(dim=-1, keepdim=True)         # [B,1]
-            weighted_mean_prob = (probs * weights).sum(dim=-1, keepdim=True) / weights_sum
+            # ---------------------------------------------------------------------------
+            #  Weighted mean p(chosen)  → logp_good
+            # ---------------------------------------------------------------------------
+            weights_sum        = weights.sum(dim=-1, keepdim=True)
+            weighted_mean_prob = (probs_good * weights).sum(dim=-1, keepdim=True) / weights_sum
             logp_good          = weighted_mean_prob.log().squeeze(-1)      # [B]
+
 
             # --- rejected token ---------------------------------------------------------
             logp_bad = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)  # [B]
