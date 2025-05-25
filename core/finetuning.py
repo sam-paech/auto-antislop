@@ -189,7 +189,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     logger.info("Starting finetuning process...")
 
-    from core.last_token_dpo_trainer import LastTokenDPOTrainer, ThresholdStop
+    from core.last_token_dpo_trainer import LastTokenDPOTrainer, ThresholdStop, AGCCallback
     
 
 
@@ -759,6 +759,10 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                         higher_is_better=False)
         )
 
+    if config["finetune_load_in_4bit"]:
+        # attempt to avoid inf/nans when using 4bit quant
+        agc_clip = config.get("finetune_agc_clip", 0.01)      # make it tunable
+        dpo_trainer.add_callback(AGCCallback(clip=agc_clip))
 
 
     if not use_unsloth:

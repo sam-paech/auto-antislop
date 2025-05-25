@@ -88,6 +88,33 @@ class EarlyStoppingByMetric(TrainerCallback):
                 print(f"[EarlyStopping] '{self.monitor}' plateaued "
                       f"(best={self.best:.5f}) – stopping training.")
 
+class AGCCallback(TrainerCallback):
+    """
+    Adaptive Gradient Clipping (Brock et al. 2021).
+    Scales a gradient down iff  ||g||₂  >  clip * (||θ||₂ + ε).
+    The default clip=0.01 works for most Transformer finetunes.
+    """
+    def __init__(self, clip: float = 0.01, eps: float = 1e-3):
+        self.clip = clip
+        self.eps  = eps
+
+    def on_after_backward(self, args, state, control, **kwargs):
+        model = kwargs["model"]                       # same instance Trainer sees
+        clip  = self.clip
+        eps   = self.eps
+
+        for p in model.parameters():
+            if p.grad is None:                        # frozen or unused param
+                continue
+            param_norm = p.norm()                     # ||θ||
+            grad_norm  = p.grad.norm()                # ||g||
+            max_norm   = clip * (param_norm + eps)    # threshold
+
+            if grad_norm > max_norm:
+                scale = max_norm / (grad_norm + 1e-6)
+                p.grad.mul_(scale)
+
+        return control                                # keep Trainer happy
 
 class LastTokenDPOTrainer(DPOTrainer):
     """
