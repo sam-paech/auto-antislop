@@ -274,23 +274,23 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
         # --- Regex Blocklist (user-supplied, written once if provided, used from iter 1+) ---
         # This file is created before the loop, but only passed to generation from iter 1.
         user_regex_blocklist_file: Optional[Path] = None # Renamed for clarity
-        if config.get('extra_regex_patterns'):
-            user_regex_blocklist_file = experiment_dir / "user_defined_regex_blocklist.json"
-            try:
-                # Write it once if resuming and it doesn't exist, or if not resuming.
-                # This ensures it's available for later iterations if resuming.
-                if not resume_mode or (resume_mode and not user_regex_blocklist_file.exists()):
-                    user_regex_blocklist_file.write_text(
-                        json.dumps(config['extra_regex_patterns'], indent=2, ensure_ascii=False),
-                        encoding="utf-8"
-                    )
-                    logger.info(f"📝 User-defined regex blocklist written to {user_regex_blocklist_file}")
-                elif user_regex_blocklist_file.exists():
-                    logger.info(f"📝 User-defined regex blocklist already exists at {user_regex_blocklist_file}")
+        extra_regex_patterns = config.get('extra_regex_patterns', [])
+        user_regex_blocklist_file = experiment_dir / "user_defined_regex_blocklist.json"
+        try:
+            # Write it once if resuming and it doesn't exist, or if not resuming.
+            # This ensures it's available for later iterations if resuming.
+            if not resume_mode or (resume_mode and not user_regex_blocklist_file.exists()):
+                user_regex_blocklist_file.write_text(
+                    json.dumps(extra_regex_patterns, indent=2, ensure_ascii=False),
+                    encoding="utf-8"
+                )
+                logger.info(f"📝 User-defined regex blocklist written to {user_regex_blocklist_file}")
+            elif user_regex_blocklist_file.exists():
+                logger.info(f"📝 User-defined regex blocklist already exists at {user_regex_blocklist_file}")
 
-            except Exception as e:
-                logger.error(f"Failed to write user-defined regex blocklist: {e}. It will not be used.")
-                user_regex_blocklist_file = None # Disable if write fails
+        except Exception as e:
+            logger.error(f"Failed to write user-defined regex blocklist: {e}. It will not be used.")
+            user_regex_blocklist_file = None # Disable if write fails
 
         iteration_stats: list[dict] = []
         iter0_output_file_for_dpo: Optional[Path] = None
