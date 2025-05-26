@@ -1,12 +1,16 @@
-
-# ---------------------------------------------------------------------
-# 1.  Dataset loader for “final-token DPO”
-# ---------------------------------------------------------------------
-import logging
-logger = logging.getLogger(__name__)
+# ------------------------------------------------------------------
+# Parallel TDPO loader (single-token version)
+# ------------------------------------------------------------------
+from __future__ import annotations
+import logging, random
 from pathlib import Path
+from collections import Counter
 from typing import Collection, Optional
+import os
+import numpy as np
 from datasets import load_dataset
+
+logger = logging.getLogger(__name__)
 
 
 def load_tdpo_dataset(
@@ -16,157 +20,17 @@ def load_tdpo_dataset(
     max_seq_len: int = 4096,
     rule_reg_strength: float = 0.0,
     stop_words: Optional[Collection[str]] = None,
+    num_proc: int | None = None,
+    batch_size: int = 1024,           # tune for your RAM / CPU balance
 ):
     """
-    Read a TDPO jsonl file → HF Dataset of prompt-ids & final-token ids.
-    If rule_reg_strength > 0, re-sample the examples so that over-frequent
-    validator.rules are down-weighted.  Output size stays identical.
+    Identical output contract; map/filter now run in parallel.
 
-    Additional rule: drop any sample whose *rejected* suffix (after
-    whitespace-trimming) is a stop-word.
+    Extra kwargs
+    ------------
+    num_proc   : how many worker processes to spawn (defaults to os.cpu_count()).
+    batch_size : how many rows a worker sees at once.
     """
-
-    import random
-    import numpy as np
-    from collections import Counter
-
-    # ── stop-word setup ----------------------------------------------------
-    if stop_words is None:
-        stop_words = {
-            "the", "a", "an", "in", "on", "at", "by", "for", "to", "of", "and",
-            "or", "but", "if", "then", "else", "when", "where", "how", "why",
-            "what", "who", "whom", "this", "that", "these", "those", "is", "are",
-            "was", "were", "be", "being", "been", "have", "has", "had", "do",
-            "does", "did", "will", "would", "shall", "should", "can", "could",
-            "may", "might", "must"
-        }
-    stop_words = set(w.lower() for w in stop_words)
-
-    # ── raw load -----------------------------------------------------------
-    ds = load_dataset("json", data_files=str(path), split="train") #.select(range(20000))
-
-    # ── optional rule-balanced re-sample ----------------------------------
-    if rule_reg_strength and rule_reg_strength > 0:
-        rules = [
-            ex["validator"]["rule"] if isinstance(ex.get("validator"), dict) else None
-            for ex in ds
-        ]
-        counts = Counter(r for r in rules if r is not None)
-        if counts:
-            thresh = np.median(list(counts.values()))
-            w_rule = {
-                r: 1.0 if c <= thresh else (thresh / c) ** rule_reg_strength
-                for r, c in counts.items()
-            }
-            w_example = [w_rule.get(r, 1.0) for r in rules]
-            probs = np.asarray(w_example, dtype=np.float64)
-            probs /= probs.sum()
-
-            rng = np.random.default_rng(3407)            # reproducible
-            idx = rng.choice(len(ds), size=len(ds), replace=False, p=probs)
-            idx.sort()
-            ds = ds.select(idx.tolist())
-
-    # ── tokenisation / sanity checks --------------------------------------
-    tokenizer.truncation_side = "left"
-
-    def _tok(ex):
-        prompt_ids = tokenizer(
-            ex["context_with_chat_template"],
-            add_special_tokens=False,
-            truncation=False,
-            return_attention_mask=False,
-        ).input_ids
-
-        # tokenize the candidate suffixes *as-is* (could include the ▁ boundary)
-        ch_ids = tokenizer(ex["chosen_decoded"],   add_special_tokens=False).input_ids
-        rj_ids = tokenizer(ex["rejected_decoded"], add_special_tokens=False).input_ids
-
-        # ── Reject rows where suffix is not exactly ONE token --------------
-        if len(ch_ids) != 1 or len(rj_ids) != 1:
-            _tok.multi_tok_rows += 1
-            logger.error('! failed tokenisation -- ' + str(len(ch_ids)) + ' -- ' + str(len(rj_ids)) + ' -- ' +str(ex["chosen_decoded"]) + ' -- ' +str(ex["rejected_decoded"]))
-            return {
-                "prompt_ids":        [],
-                "chosen_token_id":    0,
-                "rejected_token_id":  0,
-                "__valid":           False,
-            }
-
-        # ── New rule: rejected token must not be a stop-word ---------------
-        # Regex patterns sometimes ban patterns beginning with a stop word.
-        # This can cause issues with model coherence if we train away from those probabilities.
-        # So we'll filter any of those out.
-        # If you want to include these rules with full effect, you can comment this section out.
-        rj_text = ex["rejected_decoded"].strip().lower()
-        if rj_text in stop_words:
-            return {
-                "prompt_ids":        [],
-                "chosen_token_id":    0,
-                "rejected_token_id":  0,
-                "__valid":           False,
-            }
-        # ──
-
-        ok = (
-            len(prompt_ids) + 1 <= max_seq_len
-            and ch_ids and rj_ids
-            and ch_ids[-1] != rj_ids[-1]
-        )
-        if not ok:                     # ← prompt too long, empty suffix, etc.
-            return {
-                "prompt_ids":        [],
-                "chosen_token_id":    0,
-                "rejected_token_id":  0,
-                "__valid":           False,
-            }
-
-        return {
-            "prompt_ids":       prompt_ids,
-            "chosen_token_id":   ch_ids[-1],
-            "rejected_token_id": rj_ids[-1],
-            "__valid":           True,
-        }
-
-    _tok.multi_tok_rows = 0            # attribute needed before first call
-    ds = ds.map(_tok, remove_columns=ds.column_names)
-    ds = ds.filter(lambda ex: ex["__valid"]).remove_columns("__valid")
-
-    if len(ds) == 0:
-        raise ValueError("no TDPO samples survived length / sanity checks")
-
-    return ds.shuffle(seed=3407)
-
-
-
-from pathlib import Path
-from typing import Collection, Optional
-
-def load_tdpo_multi_dataset(
-    path: Path,
-    tokenizer,
-    *,
-    max_seq_len: int = 4096,
-    rule_reg_strength: float = 0.0,
-    stop_words: Optional[Collection[str]] = None,
-):
-    """
-    JSONL schema requirements
-        context_with_chat_template : str
-        multi_chosen_decoded       : list[str]   (≥1 surface forms)
-        rejected_decoded           : str
-        validator.rule             : optional str  (for re-weighting)
-
-    Output HF Dataset columns
-        prompt_ids      : List[int]
-        chosen_ids      : List[int]  (variable length ≥1)
-        rejected_token_id     : int
-    """
-    import random, numpy as np, json
-    from collections import Counter
-    from datasets import load_dataset
-
-    # ── stop-word filter (same as single-token path) ─────────────────────
     if stop_words is None:
         stop_words = {
             "the","a","an","in","on","at","by","for","to","of","and","or","but",
@@ -175,24 +39,21 @@ def load_tdpo_multi_dataset(
             "been","have","has","had","do","does","did","will","would","shall",
             "should","can","could","may","might","must"
         }
-    stop_words = set(w.lower() for w in stop_words)
+    stop_words = {w.lower() for w in stop_words}
 
+    # ── raw load ─────────────────────────────────────────────────────────
     ds = load_dataset("json", data_files=str(path), split="train")
 
-    # ── optional rule-frequency re-sampling (identical logic) ────────────
+    # ── optional rule-frequency re-sampling (unchanged logic) ───────────
     if rule_reg_strength and rule_reg_strength > 0:
-        rules = [
-            ex["validator"]["rule"] if isinstance(ex.get("validator"), dict) else None
-            for ex in ds
-        ]
+        rules  = [ex["validator"]["rule"] if isinstance(ex.get("validator"), dict) else None
+                  for ex in ds]
         counts = Counter(r for r in rules if r is not None)
         if counts:
             thresh = np.median(list(counts.values()))
-            w_rule = {
-                r: 1.0 if c <= thresh else (thresh / c) ** rule_reg_strength
-                for r, c in counts.items()
-            }
-            probs = np.asarray([w_rule.get(r, 1.0) for r in rules], dtype=np.float64)
+            w_rule = {r: 1.0 if c <= thresh else (thresh / c) ** rule_reg_strength
+                      for r, c in counts.items()}
+            probs  = np.asarray([w_rule.get(r, 1.0) for r in rules], dtype=np.float64)
             probs /= probs.sum()
             rng = np.random.default_rng(3407)
             idx = rng.choice(len(ds), size=len(ds), replace=False, p=probs)
@@ -200,62 +61,189 @@ def load_tdpo_multi_dataset(
             ds = ds.select(idx.tolist())
 
     tokenizer.truncation_side = "left"
+    num_proc = num_proc or os.cpu_count()
 
-    # ── tokenisation & validation ────────────────────────────────────────
-    def _tok(ex):
-        prompt_ids = tokenizer(
-            ex["context_with_chat_template"],
+    # ── batched tokenisation ────────────────────────────────────────────
+    def _tok(batch):
+        out_prompt, out_c, out_r, out_valid = [], [], [], []
+
+        # batch encode prompts in one call ↓
+        prompt_tok = tokenizer(
+            batch["context_with_chat_template"],
             add_special_tokens=False,
             truncation=False,
             return_attention_mask=False,
         ).input_ids
 
-        # multi-chosen list
-        chosen_surfaces = ex.get("multi_chosen_decoded") or []
-        rejected_surface = ex["rejected_decoded"]
+        # iterate inside Python only over the small per-row suffixes
+        for p_ids, ch, rj in zip(prompt_tok,
+                                 batch["chosen_decoded"],
+                                 batch["rejected_decoded"]):
+            ch_ids = tokenizer(ch, add_special_tokens=False).input_ids
+            rj_ids = tokenizer(rj, add_special_tokens=False).input_ids
 
-        # tokenise every candidate exactly once
-        chosen_tok_ids = [
-            tokenizer(t, add_special_tokens=False).input_ids for t in chosen_surfaces
-        ]
-        rejected_tok_ids = tokenizer(rejected_surface, add_special_tokens=False).input_ids
-
-        # ── validation checks ────────────────────────────────────────────
-        valid = (
-            chosen_tok_ids
-            and all(len(t) == 1 for t in chosen_tok_ids)   # each alt one token
-            and len(rejected_tok_ids) == 1
-            and rejected_surface.strip().lower() not in stop_words
-            and len(prompt_ids) + 1 <= max_seq_len
-        )
-        if not valid:
-            return {
-                "prompt_ids":        [],
-                "chosen_ids":        [],
-                "rejected_token_id":  0,
-                "__valid": False
-            }
-
-        flat_chosen = [t[0] for t in chosen_tok_ids]
-
-        # don’t keep examples where rejected == one of the chosen
-        if rejected_tok_ids[0] in flat_chosen:
-            return {
-                "prompt_ids":        [],
-                "chosen_ids":        [],
-                "rejected_token_id":  0,
-                "__valid": False
-            }
+            valid = (
+                len(ch_ids) == 1 and len(rj_ids) == 1
+                and rj.strip().lower() not in stop_words
+                and len(p_ids) + 1 <= max_seq_len
+                and ch_ids[-1] != rj_ids[-1]
+            )
+            out_valid.append(valid)
+            if valid:
+                out_prompt.append(p_ids)
+                out_c.append(ch_ids[-1])
+                out_r.append(rj_ids[-1])
+            else:
+                out_prompt.append([])
+                out_c.append(0)
+                out_r.append(0)
 
         return {
-            "prompt_ids":  prompt_ids,
-            "chosen_ids":  flat_chosen,       # variable-length list[int]
-            "rejected_token_id": rejected_tok_ids[0],
-            "__valid":     True,
+            "prompt_ids":        out_prompt,
+            "chosen_token_id":   out_c,
+            "rejected_token_id": out_r,
+            "__valid":           out_valid,
         }
 
-    ds = ds.map(_tok, remove_columns=ds.column_names)
-    ds = ds.filter(lambda ex: ex["__valid"]).remove_columns("__valid")
+    ds = ds.map(
+        _tok,
+        batched=True,
+        batch_size=batch_size,
+        remove_columns=ds.column_names,
+        num_proc=num_proc,
+        desc="tokenising",
+    )
+
+    ds = ds.filter(lambda ex: ex["__valid"], num_proc=num_proc, desc="filter")
+    ds = ds.remove_columns("__valid")
+
+    if len(ds) == 0:
+        raise ValueError("no TDPO samples survived length / sanity checks")
+
+    return ds.shuffle(seed=3407)
+
+
+def load_tdpo_multi_dataset(
+    path: Path,
+    tokenizer,
+    *,
+    max_seq_len: int = 4096,
+    rule_reg_strength: float = 0.0,
+    stop_words: Optional[Collection[str]] = None,
+    num_proc: int | None = None,
+    batch_size: int = 512,           # adjust to your memory/CPU budget
+):
+    """
+    Parallel loader for the “multi-chosen” TDPO JSONL schema.
+
+    Returns
+    -------
+    HF Dataset with columns
+        prompt_ids        : List[int]
+        chosen_ids        : List[int]   (≥1, variable length)
+        rejected_token_id : int
+    """
+    # ── stop-word filter ────────────────────────────────────────────────
+    if stop_words is None:
+        stop_words = {
+            "the","a","an","in","on","at","by","for","to","of","and","or","but",
+            "if","then","else","when","where","how","why","what","who","whom",
+            "this","that","these","those","is","are","was","were","be","being",
+            "been","have","has","had","do","does","did","will","would","shall",
+            "should","can","could","may","might","must"
+        }
+    stop_words = {w.lower() for w in stop_words}
+
+    # ── raw load ────────────────────────────────────────────────────────
+    ds = load_dataset("json", data_files=str(path), split="train")
+
+    # ── optional rule-frequency re-sampling ────────────────────────────
+    if rule_reg_strength and rule_reg_strength > 0:
+        rules  = [ex["validator"]["rule"] if isinstance(ex.get("validator"), dict) else None
+                  for ex in ds]
+        counts = Counter(r for r in rules if r is not None)
+        if counts:
+            thresh = np.median(list(counts.values()))
+            w_rule = {r: 1.0 if c <= thresh else (thresh / c) ** rule_reg_strength
+                      for r, c in counts.items()}
+            probs  = np.asarray([w_rule.get(r, 1.0) for r in rules], dtype=np.float64)
+            probs /= probs.sum()
+            rng = np.random.default_rng(3407)
+            idx = rng.choice(len(ds), size=len(ds), replace=False, p=probs)
+            idx.sort()
+            ds = ds.select(idx.tolist())
+
+    tokenizer.truncation_side = "left"
+    num_proc = num_proc or os.cpu_count()
+
+    # ── batched tokenisation & validation ───────────────────────────────
+    def _tok(batch):
+        out_prompt, out_chosen, out_rej, out_valid = [], [], [], []
+
+        # vectorised prompt encoding
+        prompt_tok = tokenizer(
+            batch["context_with_chat_template"],
+            add_special_tokens=False,
+            truncation=False,
+            return_attention_mask=False,
+        ).input_ids
+
+        # per-row suffix handling
+        for p_ids, chosen_surf, rej_surf in zip(
+            prompt_tok,
+            batch["multi_chosen_decoded"],
+            batch["rejected_decoded"],
+        ):
+            # guarantee list-of-str for chosen
+            chosen_surf = chosen_surf or []
+            # tokenize suffixes (lists are short; overhead negligible)
+            chosen_tok_ids = [
+                tokenizer(t, add_special_tokens=False).input_ids for t in chosen_surf
+            ]
+            rej_tok_ids = tokenizer(rej_surf, add_special_tokens=False).input_ids
+
+            valid = (
+                chosen_tok_ids
+                and all(len(t) == 1 for t in chosen_tok_ids)      # each alt one token
+                and len(rej_tok_ids) == 1
+                and rej_surf.strip().lower() not in stop_words
+                and len(p_ids) + 1 <= max_seq_len
+            )
+
+            if valid:
+                flat_chosen = [t[0] for t in chosen_tok_ids]
+                # reject rows where rejection collides with any chosen token
+                if rej_tok_ids[0] in flat_chosen:
+                    valid = False
+
+            out_valid.append(valid)
+            if valid:
+                out_prompt.append(p_ids)
+                out_chosen.append(flat_chosen)
+                out_rej.append(rej_tok_ids[0])
+            else:
+                out_prompt.append([])
+                out_chosen.append([])
+                out_rej.append(0)
+
+        return {
+            "prompt_ids":        out_prompt,
+            "chosen_ids":        out_chosen,
+            "rejected_token_id": out_rej,
+            "__valid":           out_valid,
+        }
+
+    ds = ds.map(
+        _tok,
+        batched=True,
+        batch_size=batch_size,
+        remove_columns=ds.column_names,
+        num_proc=num_proc,
+        desc="tokenising",
+    )
+
+    ds = ds.filter(lambda ex: ex["__valid"], num_proc=num_proc, desc="filter")
+    ds = ds.remove_columns("__valid")
 
     if len(ds) == 0:
         raise ValueError("no TDPO-MULTI samples survived length / sanity checks")
