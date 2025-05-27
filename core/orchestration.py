@@ -44,6 +44,34 @@ def _copy_if_exists(src: Path, dst: Path) -> None:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
 
+def _patch_length_errors(jsonl_path: Path) -> None:
+    """
+    Re-write rows whose error msg contains 'maximum context length'
+    so that later iterations treat them like refusals.
+    """
+    if not jsonl_path.is_file():
+        return
+    changed = False
+    out_lines = []
+    with jsonl_path.open(encoding="utf-8") as fh:
+        for ln in fh:
+            try:
+                row = json.loads(ln)
+            except json.JSONDecodeError:
+                out_lines.append(ln); continue
+            if (
+                row.get("status") == "failed"
+                and isinstance(row.get("error"), str)
+                and "maximum context length" in row["error"]
+            ):
+                row["status"] = "skipped -- too long"
+                row["refusal_detected"] = True
+                changed = True
+            out_lines.append(json.dumps(row, ensure_ascii=False) + "\n")
+    if changed:
+        jsonl_path.write_text("".join(out_lines), encoding="utf-8")
+
+
 def _build_generation_command(
     main_script_path: Path,
     config: Dict[str, Any],
@@ -450,6 +478,9 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
                         if iter_idx == 0:
                             iter0_output_file_for_dpo = None
                         continue
+
+                    # turn “max-context” failures into skips so later iterations don’t retry them
+                    _patch_length_errors(iter_output_jsonl)
 
 
                 if not iter_output_jsonl.exists() or iter_output_jsonl.stat().st_size == 0:
