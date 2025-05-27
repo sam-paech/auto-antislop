@@ -4,21 +4,48 @@ from pathlib import Path
 import logging
 import sys
 import json
-import shutil # For copying config example
+import shutil
+from typing import List
 
 logger = logging.getLogger(__name__)
 
-# utils/fs_helpers.py  (new helper)
-def merge_custom_bans_into_file(path: Path, extra_items: list[str]) -> None:
-    current = []
-    if path.exists():
-        try:
-            current = json.loads(path.read_text("utf-8"))
-        except Exception:
-            pass                     # keep going, we’ll just overwrite
-    merged = sorted(set(current) | set(extra_items))
-    if merged != current:
-        path.write_text(json.dumps(merged, indent=2, ensure_ascii=False), "utf-8")
+
+
+def merge_custom_bans_into_file(path: Path, extra_items: List[str]) -> None:
+    """Merge extra_items into `path`, preserving original on-disk format."""
+
+    # 1) read whatever is already there
+    try:
+        current_raw = json.loads(path.read_text("utf-8")) if path.exists() else []
+    except Exception:
+        current_raw = []
+
+    if not isinstance(current_raw, list):
+        current_raw = []
+
+    # 2) normalise existing items → plain strings
+    existing: set[str] = set()
+    slop_format = False               # do we need to write back [[phrase,1]] ?
+
+    for entry in current_raw:
+        if isinstance(entry, list):   # slop-phrase style [phrase, freq]
+            slop_format = True
+            if entry:                 # non-empty list
+                existing.add(str(entry[0]))
+        else:                         # plain string
+            existing.add(str(entry))
+
+    # 3) merge & sort
+    merged = sorted(existing | set(map(str, extra_items)))
+
+    # 4) write back in the same shape we found
+    if slop_format:
+        payload = [[p, 1] for p in merged]
+    else:
+        payload = merged
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), "utf-8")
 
 
 def download_nltk_resource(resource_id: str, resource_name: str):
