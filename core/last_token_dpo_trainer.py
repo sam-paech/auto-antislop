@@ -212,8 +212,9 @@ class LastTokenDPOTrainer(DPOTrainer):
         USE_KL_LOSS=False # tether all the logits other than the ones we are interested in moving to the reference
 
         # ── unpack ---------------------------------------------------------
-        ids   = inputs["prompt_ids"].to(model.device)      # [B,L]
-        attn  = inputs["attention_mask"].to(model.device)  # [B,L]
+        device   = next(model.parameters()).device            # works for DP / DDP
+        ids   = inputs["prompt_ids"].to(device)               # [B,L]
+        attn  = inputs["attention_mask"].to(device)           # [B,L]
         B, L  = ids.shape
         
         # Find the last real token position for each sequence
@@ -241,11 +242,11 @@ class LastTokenDPOTrainer(DPOTrainer):
 
         if inputs.get("chosen_ids") is not None: # tdpo-multi path
             # --- unpack ----------------------------------------------------------------
-            ch_ids  = inputs["chosen_ids"].to(model.device)       # [B,C]
-            ch_mask = inputs["chosen_mask"].to(model.device)      # [B,C] bool
+            ch_ids  = inputs["chosen_ids"].to(device)       # [B,C]
+            ch_mask = inputs["chosen_mask"].to(device)      # [B,C] bool
             
             # --- rejected token ---------------------------------------------------------
-            rej     = inputs["rejected_token_id"].to(model.device)  # [B]
+            rej     = inputs["rejected_token_id"].to(device)  # [B]
             logp_bad = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)  # [B]
 
 
@@ -308,8 +309,8 @@ class LastTokenDPOTrainer(DPOTrainer):
 
         else:
             # single-token path
-            chosen = inputs["chosen_token_id"].to(model.device)
-            rejected = inputs["rejected_token_id"].to(model.device)
+            chosen = inputs["chosen_token_id"].to(device)
+            rejected = inputs["rejected_token_id"].to(device)
             logp_good = logp_all.gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
             logp_bad = logp_all.gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
 
