@@ -9,6 +9,8 @@ import pandas as pd
 from typing import Optional, Dict, Any, List
 import traceback
 
+from utils.fs_helpers import merge_custom_bans_into_file
+
 from core.analysis import (
     build_overrep_word_csv, select_overrep_words_for_ban,
     update_banned_slop_phrases, analyze_iteration_outputs_core,
@@ -375,6 +377,17 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
                 ngram_file_for_generation: Optional[Path] = None
                 slop_file_for_generation: Optional[Path] = None
                 regex_file_for_generation: Optional[Path] = None
+
+                # If we are resuming and this is the first iteration after the resume,
+                # force-merge any new YAML bans into the existing files *before* generation.
+                if resume_mode and iter_idx == start_iter_idx:
+                    if config['enable_ngram_ban'] and config.get('extra_ngrams_to_ban'):
+                        merge_custom_bans_into_file(banned_ngrams_json_path,
+                                                    config['extra_ngrams_to_ban'])
+                    if config['enable_slop_phrase_ban'] and config.get('extra_slop_phrases_to_ban'):
+                        merge_custom_bans_into_file(banned_slop_phrases_json_path,
+                                                    config['extra_slop_phrases_to_ban'])
+
 
                 if iter_idx > 0: # Banning starts from iteration 1
                     if config['enable_ngram_ban'] and banned_ngrams_json_path.exists():

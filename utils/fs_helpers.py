@@ -3,9 +3,23 @@ import datetime
 from pathlib import Path
 import logging
 import sys
+import json
 import shutil # For copying config example
 
 logger = logging.getLogger(__name__)
+
+# utils/fs_helpers.py  (new helper)
+def merge_custom_bans_into_file(path: Path, extra_items: list[str]) -> None:
+    current = []
+    if path.exists():
+        try:
+            current = json.loads(path.read_text("utf-8"))
+        except Exception:
+            pass                     # keep going, we’ll just overwrite
+    merged = sorted(set(current) | set(extra_items))
+    if merged != current:
+        path.write_text(json.dumps(merged, indent=2, ensure_ascii=False), "utf-8")
+
 
 def download_nltk_resource(resource_id: str, resource_name: str):
     """Downloads NLTK resource if not found."""
