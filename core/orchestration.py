@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 import sys
 import os
@@ -38,13 +39,10 @@ def _load_prompt_ids(path: Path) -> set[int]:
                 continue
     return ids
 
-
-def _write_missing_prompt_file(missing: list[int], out_dir: Path, iter_idx: int) -> Path:
-    """Write one integer per line – the format antislop-vllm already understands."""
-    p = out_dir / f"iter_{iter_idx}_missing_prompt_ids.txt"
-    p.write_text("\n".join(map(str, missing)), encoding="utf-8")
-    return p
-
+def _copy_if_exists(src: Path, dst: Path) -> None:
+    if src and src.is_file():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
 
 def _build_generation_command(
     main_script_path: Path,
@@ -378,17 +376,6 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
                 slop_file_for_generation: Optional[Path] = None
                 regex_file_for_generation: Optional[Path] = None
 
-                # If we are resuming and this is the first iteration after the resume,
-                # force-merge any new YAML bans into the existing files *before* generation.
-                if resume_mode and iter_idx == start_iter_idx:
-                    if config['enable_ngram_ban'] and config.get('extra_ngrams_to_ban'):
-                        merge_custom_bans_into_file(banned_ngrams_json_path,
-                                                    config['extra_ngrams_to_ban'])
-                    if config['enable_slop_phrase_ban'] and config.get('extra_slop_phrases_to_ban'):
-                        merge_custom_bans_into_file(banned_slop_phrases_json_path,
-                                                    config['extra_slop_phrases_to_ban'])
-
-
                 if iter_idx > 0: # Banning starts from iteration 1
                     if config['enable_ngram_ban'] and banned_ngrams_json_path.exists():
                         ngram_file_for_generation = banned_ngrams_json_path
@@ -396,7 +383,34 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
                         slop_file_for_generation = banned_slop_phrases_json_path
                     if user_regex_blocklist_file and user_regex_blocklist_file.exists(): # User-defined regex
                         regex_file_for_generation = user_regex_blocklist_file
-                
+
+                    # If we are resuming and this is the first iteration after the resume,
+                    # force-merge any new YAML bans into the existing files *before* generation.
+                    if resume_mode and iter_idx == start_iter_idx:
+                        if config['enable_ngram_ban'] and config.get('extra_ngrams_to_ban'):
+                            merge_custom_bans_into_file(banned_ngrams_json_path,
+                                                        config['extra_ngrams_to_ban'])
+                        if config['enable_slop_phrase_ban'] and config.get('extra_slop_phrases_to_ban'):
+                            merge_custom_bans_into_file(banned_slop_phrases_json_path,
+                                                        config['extra_slop_phrases_to_ban'])
+                            
+                    _copy_if_exists(ngram_file_for_generation,
+                                    iter_analysis_dir / "banned_ngrams_used.json")
+                    _copy_if_exists(slop_file_for_generation,
+                                    iter_analysis_dir / "banned_slop_phrases_used.json")
+                    _copy_if_exists(regex_file_for_generation,
+                                    iter_analysis_dir / "regex_blocklist_used.json")
+                    
+                    # remember their current contents so we can diff later
+                    before_ngrams = (set(json.loads(ngram_file_for_generation.read_text("utf-8")))
+                                    if ngram_file_for_generation and ngram_file_for_generation.exists()
+                                    else set())
+                    before_slop   = (set(json.loads(slop_file_for_generation.read_text("utf-8")))
+                                    if slop_file_for_generation and slop_file_for_generation.exists()
+                                    else set())
+                else:
+                    before_ngrams, before_slop = set(), set()
+
                 if iter_idx == 0:
                     logger.info("Iteration 0: Running baseline generation with NO ban lists.")
                 else:
@@ -555,6 +569,23 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
                     except Exception as exc:
                         _iter_log("❌ update_banned_slop_phrases failed:\n" +
                                 "".join(traceback.format_exception_only(type(exc), exc)))
+
+                # ---------- diff → what was *added* this iteration -------------------------
+                if iter_idx > 0:
+                    # n-grams
+                    if config['enable_ngram_ban'] and banned_ngrams_json_path.exists():
+                        after_ngrams = set(json.loads(banned_ngrams_json_path.read_text("utf-8")))
+                        new_ngrams   = sorted(after_ngrams - before_ngrams)
+                        (iter_analysis_dir / "banned_ngrams_new_this_iter.json"
+                        ).write_text(json.dumps(new_ngrams, indent=2, ensure_ascii=False), "utf-8")
+
+                    # slop phrases
+                    if config['enable_slop_phrase_ban'] and banned_slop_phrases_json_path.exists():
+                        after_slop = set(json.loads(banned_slop_phrases_json_path.read_text("utf-8")))
+                        new_slop   = sorted(after_slop - before_slop)
+                        (iter_analysis_dir / "banned_slop_phrases_new_this_iter.json"
+                        ).write_text(json.dumps(new_slop, indent=2, ensure_ascii=False), "utf-8")
+
 
 
                 # --- Calculate Metrics for this iteration ---
