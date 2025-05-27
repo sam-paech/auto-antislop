@@ -602,14 +602,14 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
                 if iter_idx > 0:
                     # n-grams
                     if config['enable_ngram_ban'] and banned_ngrams_json_path.exists():
-                        after_ngrams = set(json.loads(banned_ngrams_json_path.read_text("utf-8")))
+                        after_ngrams = set_from_json(banned_ngrams_json_path)
                         new_ngrams   = sorted(after_ngrams - before_ngrams)
                         (iter_analysis_dir / "banned_ngrams_new_this_iter.json"
                         ).write_text(json.dumps(new_ngrams, indent=2, ensure_ascii=False), "utf-8")
 
                     # slop phrases
                     if config['enable_slop_phrase_ban'] and banned_slop_phrases_json_path.exists():
-                        after_slop = set(json.loads(banned_slop_phrases_json_path.read_text("utf-8")))
+                        after_slop = set_from_json(banned_slop_phrases_json_path)
                         new_slop   = sorted(after_slop - before_slop)
                         (iter_analysis_dir / "banned_slop_phrases_new_this_iter.json"
                         ).write_text(json.dumps(new_slop, indent=2, ensure_ascii=False), "utf-8")
