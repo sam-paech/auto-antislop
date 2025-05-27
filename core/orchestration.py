@@ -10,7 +10,7 @@ import pandas as pd
 from typing import Optional, Dict, Any, List
 import traceback
 
-from utils.fs_helpers import merge_custom_bans_into_file
+from utils.fs_helpers import merge_custom_bans_into_file, set_from_json
 
 from core.analysis import (
     build_overrep_word_csv, select_overrep_words_for_ban,
@@ -402,12 +402,9 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
                                     iter_analysis_dir / "regex_blocklist_used.json")
                     
                     # remember their current contents so we can diff later
-                    before_ngrams = (set(json.loads(ngram_file_for_generation.read_text("utf-8")))
-                                    if ngram_file_for_generation and ngram_file_for_generation.exists()
-                                    else set())
-                    before_slop   = (set(json.loads(slop_file_for_generation.read_text("utf-8")))
-                                    if slop_file_for_generation and slop_file_for_generation.exists()
-                                    else set())
+                    before_ngrams = set_from_json(ngram_file_for_generation)
+                    before_slop   = set_from_json(slop_file_for_generation)
+
                 else:
                     before_ngrams, before_slop = set(), set()
 

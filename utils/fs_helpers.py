@@ -9,6 +9,26 @@ from typing import List
 
 logger = logging.getLogger(__name__)
 
+def set_from_json(path: Path) -> set[str]:
+    """Return a hashable set of strings from a ban-list file that may be
+       either  ["foo bar", …]  or  [["foo bar", 1], …]."""
+    if not path or not path.is_file():
+        return set()
+    try:
+        raw = json.loads(path.read_text("utf-8"))
+    except Exception:
+        return set()
+
+    if not isinstance(raw, list):
+        return set()
+
+    out = set()
+    for item in raw:
+        if isinstance(item, list) and item:        # slop format
+            out.add(str(item[0]))
+        else:                                      # plain string
+            out.add(str(item))
+    return out
 
 
 def merge_custom_bans_into_file(path: Path, extra_items: List[str]) -> None:
