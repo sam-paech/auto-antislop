@@ -94,7 +94,7 @@ def load_tdpo_dataset(
                 out_c.append(ch_ids[-1])
                 out_r.append(rj_ids[-1])
             else:
-                out_prompt.append([])
+                out_prompt.append([0])
                 out_c.append(0)
                 out_r.append(0)
 
@@ -222,8 +222,8 @@ def load_tdpo_multi_dataset(
                 out_chosen.append(flat_chosen)
                 out_rej.append(rej_tok_ids[0])
             else:
-                out_prompt.append([])
-                out_chosen.append([])
+                out_prompt.append([0])
+                out_chosen.append([0])
                 out_rej.append(0)
 
         return {
