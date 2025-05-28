@@ -185,6 +185,16 @@ def freeze_early_layers(model, n_unfrozen: int = 4, verbose: bool = True):
 
 def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     use_unsloth = config.get("finetune_use_unsloth", False)
+
+    # honour per-stage GPU mask – must precede any torch import
+    gpu_mask = config.get("finetune_cuda_visible_devices")
+    if gpu_mask:
+        import os, logging
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_mask)
+        logging.getLogger(__name__).info(
+            f"Finetune stage limited to CUDA_VISIBLE_DEVICES={gpu_mask}"
+        )
+
     load_imports(use_unsloth)
 
     logger.info("Starting finetuning process...")

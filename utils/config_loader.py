@@ -117,6 +117,7 @@ _FINETUNE: Sequence[str] = (
     "finetune_save_gguf_q8_0",
     "finetune_max_train_examples",
     "finetune_tdpo_sample_regularisation_strength",
+    "finetune_cuda_visible_devices",
 )
 
 
@@ -166,6 +167,9 @@ def merge_config_with_cli_args(config: Dict[str, Any], cli_args: argparse.Namesp
         merged['manage_vllm'] = cli_args.manage_vllm
     if getattr(cli_args, 'generation_step_enabled', None) is not None:
         merged['generation_step_enabled'] = cli_args.generation_step_enabled
+    if getattr(cli_args, "finetune_cuda_visible_devices", None) is not None:
+        merged["finetune_cuda_visible_devices"] = cli_args.finetune_cuda_visible_devices
+
 
     # 3. All remaining keys from the old DEFAULT_CONFIG
     _all_groups: Sequence[Sequence[str]] = (

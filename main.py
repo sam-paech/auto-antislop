@@ -158,6 +158,13 @@ def main():
             "If omitted and --finetune-mode is tdpo, the script will "
             "pick the highest iter_*_tdpo_pairs.jsonl in the experiment dir."
     )
+    finetune_group.add_argument(
+        "--finetune-cuda-visible-devices",
+        type=str,
+        default=None,
+        help='Comma-separated GPU ids for the finetune stage only (e.g. "1,3").'
+    )
+
 
     args = parser.parse_args()
 
