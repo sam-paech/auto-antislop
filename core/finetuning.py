@@ -729,11 +729,16 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     else:        
         optimiser_str = "paged_adamw_32bit"
 
+    # pass the right args to the dpo trainer depending on what it expects
+    import inspect
+    init_params = inspect.signature(DPOTrainer.__init__).parameters
+    kw = {"processing_class" if "processing_class" in init_params else "tokenizer": tokenizer}
+
     dpo_trainer = TrainerClass(
         model=model,
         ref_model=None,
         train_dataset=dpo_dataset_hf,
-        tokenizer=tokenizer,
+        **kw,
         args=DPOConfig(
             per_device_train_batch_size=config['finetune_batch_size'],
             gradient_accumulation_steps=config['finetune_gradient_accumulation_steps'],
