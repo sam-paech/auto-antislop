@@ -234,7 +234,6 @@ class LastTokenDPOTrainer(DPOTrainer):
             position_ids=pos_full,
             use_cache=False,
             return_dict=True,
-            labels=ids,          # <- ensures outputs.loss exists (patch for unsloth monkeypatch)
         )
         
         # With left padding, the last token is always at position -1
@@ -348,7 +347,7 @@ class LastTokenDPOTrainer(DPOTrainer):
                     with self.null_ref_context():
                         ref_logits_last = model(
                             ids, attention_mask=attn, position_ids=pos_full,
-                            use_cache=False, return_dict=True, labels=ids,
+                            use_cache=False, return_dict=True,
                         ).logits[:, -1, :]
                 else:
                     ref_logits_last = self.ref_model(

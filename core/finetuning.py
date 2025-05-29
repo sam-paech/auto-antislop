@@ -34,6 +34,20 @@ def load_imports(use_unsloth):
             from unsloth.chat_templates import get_chat_template
             globals()['get_chat_template'] = get_chat_template
             globals()['FastLanguageModel'] = FastLanguageModel
+
+            # monkeypatch for unsloth's monkeypatch
+            import types
+            import unsloth_zoo.temporary_patches.gemma as ug
+
+            orig = ug.GemmaForCausalLM.forward
+            def safe_forward(self, *a, **kw):
+                out = orig(self, *a, **kw)
+                # Uns loth’s TD fix expects `.loss`; add a stub if absent
+                if not hasattr(out, "loss"):
+                    out.loss = None
+                return out
+            ug.GemmaForCausalLM.forward = types.MethodType(safe_forward,
+                                                        ug.GemmaForCausalLM)
         
         from transformers import AutoTokenizer, TextStreamer # Added TextStreamer for potential inference example
         from transformers import AutoModelForCausalLM
@@ -563,8 +577,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
                     with torch.cuda.amp.autocast(dtype=torch.bfloat16):
                         #logits = model(ids, attention_mask=attn).logits
-                        outputs     = model(ids, attention_mask=attn, labels=ids)
-                        logits_next = outputs.logits[:, -1, :]
+                        logits_next = model(ids, attention_mask=attn).logits[:, -1, :]
                         logp_all    = torch.log_softmax(logits_next, -1)
 
                     # ----- variant detection -------------------------------------------------
