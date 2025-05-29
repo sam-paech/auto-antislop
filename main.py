@@ -6,6 +6,7 @@ import json
 import datetime
 from pathlib import Path
 import datetime # For pipeline duration
+import yaml
 
 # ── make utils importable ────────────────────────────────────────────
 ROOT_DIR = Path(__file__).resolve().parent
@@ -253,6 +254,15 @@ def main():
         
         # Pass the actual experiment_run_dir to orchestrate_pipeline
         config['current_experiment_run_dir'] = str(experiment_run_dir)
+
+        # ---------- persist the exact config used for this run ----------
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        cfg_path  = experiment_run_dir / f"run_config_{timestamp}.yaml"
+        cfg_path.write_text(
+            yaml.safe_dump(config, sort_keys=False, allow_unicode=True),
+            encoding="utf-8"
+        )
+        logger.info(f"Run configuration written → {cfg_path}")
 
         orchestrate_pipeline(config, experiment_run_dir, resume_mode=(resume_dir_path is not None))
 
