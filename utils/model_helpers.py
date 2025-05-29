@@ -80,3 +80,32 @@ def fix_gemma3_checkpoint(ckpt_dir: str | Path) -> None:
 
     log.info("✓ Gemma-3 checkpoint repaired.")
 
+def monkey_patch_unsloth_gemma():
+    """
+    Find the Gemma Causal-LM class defined inside the current
+    `unsloth_zoo.temporary_patches.gemma` module and wrap its
+    .forward so it always returns a `.loss` attribute.
+    Runs safely no-op if Uns-loth changes names again.
+    """
+    import types, inspect
+    try:
+        import unsloth_zoo.temporary_patches.gemma as ug
+    except ModuleNotFoundError:
+        return                      # Uns-loth not imported → nothing to do
+
+    # pick first class that ends with 'ForCausalLM'
+    gemma_cls = None
+    for name, obj in inspect.getmembers(ug, inspect.isclass):
+        if name.endswith("ForCausalLM"):
+            gemma_cls = obj
+            break
+    if gemma_cls is None:
+        return                      # no Gemma class found
+
+    orig_fwd = gemma_cls.forward
+    def safe_fwd(self, *a, **kw):
+        out = orig_fwd(self, *a, **kw)
+        if not hasattr(out, "loss"):
+            out.loss = None
+        return out
+    gemma_cls.forward = types.MethodType(safe_fwd, gemma_cls)

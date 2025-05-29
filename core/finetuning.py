@@ -23,7 +23,7 @@ import os
 import math
 import json
 from utils.dataset_helpers import load_tdpo_dataset, load_tdpo_multi_dataset
-from utils.model_helpers import fix_gemma3_checkpoint
+from utils.model_helpers import fix_gemma3_checkpoint, monkey_patch_unsloth_gemma
 logger = logging.getLogger(__name__)
 
 def load_imports(use_unsloth):
@@ -36,18 +36,7 @@ def load_imports(use_unsloth):
             globals()['FastLanguageModel'] = FastLanguageModel
 
             # monkeypatch for unsloth's monkeypatch
-            import types
-            import unsloth_zoo.temporary_patches.gemma as ug
-
-            orig = ug.GemmaForCausalLM.forward
-            def safe_forward(self, *a, **kw):
-                out = orig(self, *a, **kw)
-                # Uns loth’s TD fix expects `.loss`; add a stub if absent
-                if not hasattr(out, "loss"):
-                    out.loss = None
-                return out
-            ug.GemmaForCausalLM.forward = types.MethodType(safe_forward,
-                                                        ug.GemmaForCausalLM)
+            monkey_patch_unsloth_gemma()
         
         from transformers import AutoTokenizer, TextStreamer # Added TextStreamer for potential inference example
         from transformers import AutoModelForCausalLM
