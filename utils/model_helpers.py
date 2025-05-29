@@ -80,30 +80,23 @@ def fix_gemma3_checkpoint(ckpt_dir: str | Path) -> None:
 
     log.info("✓ Gemma-3 checkpoint repaired.")
 
-# ---------------------------------------------------------------
-# Make Uns-loth Gemma-3 forward tolerant when labels=None
-# ---------------------------------------------------------------
-import types
-def ensure_loss_attr(model):
-    """
-    Wraps `model.forward` so that the returned object always has
-    a `.loss` attribute (set to None when not computed).  Safe to
-    call more than once; does nothing for non-Gemma models.
-    """
-    if not model.__class__.__name__.startswith("Gemma3"):
-        return  # some other backbone – skip
+def guard_gemma_loss_attr():
+    import types, inspect
+    import transformers.models.gemma3.modeling_gemma3 as gm
 
-    orig_fwd = model.forward
-    # Don’t double-wrap
-    if getattr(orig_fwd, "_unsloth_loss_safe", False):
-        return
+    cls = getattr(gm, "Gemma3ForConditionalGeneration", None)
+    if cls is None:
+        return                          # Something really odd – bail
+
+    orig_fwd = cls.forward
+    if getattr(orig_fwd, "_loss_guard", False):
+        return                          # Already patched
 
     def safe_forward(self, *args, **kw):
-        out = orig_fwd(*args, **kw)
-        if not hasattr(out, "loss"):
-            # Gemma3*OutputWithPast is a mutable dataclass – we can add attr
+        out = orig_fwd(self, *args, **kw)
+        if not hasattr(out, "loss"):    # add stub once
             out.loss = None
         return out
 
-    safe_forward._unsloth_loss_safe = True
-    model.forward = types.MethodType(safe_forward, model)
+    safe_forward._loss_guard = True
+    cls.forward = types.MethodType(safe_forward, cls)
