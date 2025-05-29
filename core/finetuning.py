@@ -408,12 +408,14 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 base_model_id,
                 quantization_config = bnb_cfg,
                 device_map          = {"": 0},
+                trust_remote_code=True,
             )
         else:
             model = AutoModelForCausalLM.from_pretrained(
                 base_model_id,
                 torch_dtype = torch.bfloat16,             # Qwen-3 was trained in bf16
                 device_map  = {"": 0},
+                trust_remote_code=True,
             )
 
         #model.config._attn_implementation = "eager"        # avoid flash-attn fp16 path
@@ -919,6 +921,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             config["finetune_base_model_id"],
             torch_dtype=torch.float16,          # or bfloat16
             device_map={"": "cpu"},             # load straight to CPU
+            trust_remote_code=True,
         )
         model_fp16 = PeftModel.from_pretrained(
             base_fp16,
