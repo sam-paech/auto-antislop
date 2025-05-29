@@ -8,6 +8,11 @@ from pathlib import Path
 import datetime # For pipeline duration
 import yaml
 
+yaml.SafeDumper.add_representer(
+    Path, lambda dumper, value: dumper.represent_scalar(
+        'tag:yaml.org,2002:str', str(value))
+)
+
 # ── make utils importable ────────────────────────────────────────────
 ROOT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT_DIR))          # so "utils" is on sys.path
