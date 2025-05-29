@@ -79,25 +79,30 @@ def fix_gemma3_checkpoint(ckpt_dir: str | Path) -> None:
         json.dump(idx, f, indent=2)
 
     log.info("✓ Gemma-3 checkpoint repaired.")
+    
+# utils/model_helpers.py  (or anywhere importable)
+def guard_gemma_loss(model):
+    """
+    Call once right after you've loaded (and, if using LoRA, PEFT-wrapped)
+    a Gemma-3 model.  Ensures every forward returns `.loss`, even when
+    labels=None.  Harmless for other models.
+    """
+    # unwrap PEFT if present
+    if model.__class__.__name__ == "PeftModel":
+        model = model.base_model.model
 
-import inspect, textwrap
-import transformers.models.gemma3.modeling_gemma3 as gm
+    if not model.__class__.__name__.startswith("Gemma3"):
+        return                              # nothing to do
 
-def patch_gemma3_forward():
-    cls = getattr(gm, "Gemma3ForConditionalGeneration", None)
-    if cls is None or getattr(cls.forward, "_unsloth_loss_fix", False):
+    cls = model.__class__
+    if getattr(cls.forward, "_loss_guard", False):
         return
 
-    src = inspect.getsource(cls.forward)
-    src = src.replace("loss = outputs.loss",
-                      "loss = getattr(outputs, 'loss', loss)")
-
-    # compile the modified code
-    namespace = {}
-    exec(textwrap.dedent(src), gm.__dict__, namespace)   # <- use module dict
-    fixed_forward = namespace["forward"]
-    fixed_forward._unsloth_loss_fix = True
-
-    cls.forward = fixed_forward          # plain assignment keeps `self` = instance
-
-# call once right after `load_imports(use_unsloth)`
+    old_fwd = cls.forward
+    def safe_fwd(self, *a, **kw):
+        out = old_fwd(self, *a, **kw)
+        if not hasattr(out, "loss"):
+            out.loss = None                # add stub once
+        return out
+    safe_fwd._loss_guard = True
+    cls.forward = safe_fwd
