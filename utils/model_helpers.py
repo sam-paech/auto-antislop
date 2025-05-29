@@ -80,31 +80,24 @@ def fix_gemma3_checkpoint(ckpt_dir: str | Path) -> None:
 
     log.info("✓ Gemma-3 checkpoint repaired.")
 
-import inspect, textwrap, types
+import inspect, textwrap
 import transformers.models.gemma3.modeling_gemma3 as gm
 
 def patch_gemma3_forward():
     cls = getattr(gm, "Gemma3ForConditionalGeneration", None)
-    if cls is None:
-        return                                      # Gemma-3 not present
-
-    # Avoid double-patching
-    if getattr(cls.forward, "_unsloth_loss_fix", False):
+    if cls is None or getattr(cls.forward, "_unsloth_loss_fix", False):
         return
 
-    orig_src = inspect.getsource(cls.forward)
-    # --- minimally edit the tail -------------------------------------
-    patched_src = orig_src.replace(
-        "loss = outputs.loss",
-        "loss = getattr(outputs, 'loss', loss)"      # <- only change
-    )
+    src = inspect.getsource(cls.forward)
+    src = src.replace("loss = outputs.loss",
+                      "loss = getattr(outputs, 'loss', loss)")
 
-    # Compile the modified source into a function object
-    scope = {}
-    exec(textwrap.dedent(patched_src), cls.__dict__, scope)
-    fixed_forward = scope["forward"]
-    fixed_forward._unsloth_loss_fix = True          # sentinel
+    # compile the modified code
+    namespace = {}
+    exec(textwrap.dedent(src), gm.__dict__, namespace)   # <- use module dict
+    fixed_forward = namespace["forward"]
+    fixed_forward._unsloth_loss_fix = True
 
-    # Bind the function to the class
-    cls.forward = fixed_forward
+    cls.forward = fixed_forward          # plain assignment keeps `self` = instance
 
+# call once right after `load_imports(use_unsloth)`
