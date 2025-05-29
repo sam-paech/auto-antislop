@@ -23,7 +23,7 @@ import os
 import math
 import json
 from utils.dataset_helpers import load_tdpo_dataset, load_tdpo_multi_dataset
-from utils.model_helpers import fix_gemma3_checkpoint, monkey_patch_unsloth_gemma
+from utils.model_helpers import fix_gemma3_checkpoint, ensure_loss_attr
 logger = logging.getLogger(__name__)
 
 def load_imports(use_unsloth):
@@ -35,9 +35,6 @@ def load_imports(use_unsloth):
             globals()['get_chat_template'] = get_chat_template
             globals()['FastLanguageModel'] = FastLanguageModel
 
-            # monkeypatch for unsloth's monkeypatch
-            monkey_patch_unsloth_gemma()
-        
         from transformers import AutoTokenizer, TextStreamer # Added TextStreamer for potential inference example
         from transformers import AutoModelForCausalLM
         from peft import PeftModel
@@ -388,6 +385,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 load_in_4bit=config['finetune_load_in_4bit'],
                 dtype=torch.bfloat16 if config['finetune_load_in_4bit'] and torch.cuda.is_bf16_supported() else None,
             )
+            ensure_loss_attr(model) # fixing an unsloth monkeypatch
             
         except Exception as e:
             logger.error(f"Failed to load base model '{model_name}' or tokenizer for DPO: {e}", exc_info=True)

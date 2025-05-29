@@ -80,32 +80,30 @@ def fix_gemma3_checkpoint(ckpt_dir: str | Path) -> None:
 
     log.info("✓ Gemma-3 checkpoint repaired.")
 
-def monkey_patch_unsloth_gemma():
+# ---------------------------------------------------------------
+# Make Uns-loth Gemma-3 forward tolerant when labels=None
+# ---------------------------------------------------------------
+import types
+def ensure_loss_attr(model):
     """
-    Find the Gemma Causal-LM class defined inside the current
-    `unsloth_zoo.temporary_patches.gemma` module and wrap its
-    .forward so it always returns a `.loss` attribute.
-    Runs safely no-op if Uns-loth changes names again.
+    Wraps `model.forward` so that the returned object always has
+    a `.loss` attribute (set to None when not computed).  Safe to
+    call more than once; does nothing for non-Gemma models.
     """
-    import types, inspect
-    try:
-        import unsloth_zoo.temporary_patches.gemma as ug
-    except ModuleNotFoundError:
-        return                      # Uns-loth not imported → nothing to do
+    if not model.__class__.__name__.startswith("Gemma3"):
+        return  # some other backbone – skip
 
-    # pick first class that ends with 'ForCausalLM'
-    gemma_cls = None
-    for name, obj in inspect.getmembers(ug, inspect.isclass):
-        if name.endswith("ForCausalLM"):
-            gemma_cls = obj
-            break
-    if gemma_cls is None:
-        return                      # no Gemma class found
+    orig_fwd = model.forward
+    # Don’t double-wrap
+    if getattr(orig_fwd, "_unsloth_loss_safe", False):
+        return
 
-    orig_fwd = gemma_cls.forward
-    def safe_fwd(self, *a, **kw):
-        out = orig_fwd(self, *a, **kw)
+    def safe_forward(self, *args, **kw):
+        out = orig_fwd(*args, **kw)
         if not hasattr(out, "loss"):
+            # Gemma3*OutputWithPast is a mutable dataclass – we can add attr
             out.loss = None
         return out
-    gemma_cls.forward = types.MethodType(safe_fwd, gemma_cls)
+
+    safe_forward._unsloth_loss_safe = True
+    model.forward = types.MethodType(safe_forward, model)
