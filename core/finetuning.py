@@ -563,7 +563,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
                     with torch.cuda.amp.autocast(dtype=torch.bfloat16):
                         #logits = model(ids, attention_mask=attn).logits
-                        logits_next = model(ids, attention_mask=attn).logits[:, -1, :]
+                        outputs     = model(ids, attention_mask=attn, labels=ids)
+                        logits_next = outputs.logits[:, -1, :]
                         logp_all    = torch.log_softmax(logits_next, -1)
 
                     # ----- variant detection -------------------------------------------------

@@ -207,9 +207,10 @@ class LastTokenDPOTrainer(DPOTrainer):
         clip_epsilon_probs  = getattr(self, "clip_epsilon_probs", 0.2)
         clip_epsilon_logits  = getattr(self, "clip_epsilon_logits", 2)
         beta = getattr(self, "beta", 0.1)
+        lambda_kl = getattr(self, "lambda_kl", 0.2)
 
         LOSS_CALC_MODE = getattr(self, "loss_calc_mode", "logits")    # probs / logits. Use probs or logits in the loss function. logits is more surgical (doesn't affect the whole logit distribution).
-        USE_KL_LOSS=False # tether all the logits other than the ones we are interested in moving to the reference
+        USE_KL_LOSS=True # tether all the logits other than the ones we are interested in moving to the reference
 
         # ── unpack ---------------------------------------------------------
         device   = next(model.parameters()).device            # works for DP / DDP
@@ -233,6 +234,7 @@ class LastTokenDPOTrainer(DPOTrainer):
             position_ids=pos_full,
             use_cache=False,
             return_dict=True,
+            labels=ids,          # <- ensures outputs.loss exists (patch for unsloth monkeypatch)
         )
         
         # With left padding, the last token is always at position -1
@@ -346,7 +348,7 @@ class LastTokenDPOTrainer(DPOTrainer):
                     with self.null_ref_context():
                         ref_logits_last = model(
                             ids, attention_mask=attn, position_ids=pos_full,
-                            use_cache=False, return_dict=True,
+                            use_cache=False, return_dict=True, labels=ids,
                         ).logits[:, -1, :]
                 else:
                     ref_logits_last = self.ref_model(
@@ -379,7 +381,6 @@ class LastTokenDPOTrainer(DPOTrainer):
             kl_pref_ratio  = kl_loss / (pref_loss + 1e-8)              # relative weight of KL vs pref
 
             # ── diagnostic ratios ─────────────────────────────────────────────
-            lambda_kl           = 0.02                                        # <-- keep in sync with the line in `loss = ...`
             pref_eps            = 1e-4          # or smaller if you like
             safe_pref_loss      = torch.clamp(pref_loss.detach(), min=pref_eps)
 
