@@ -7,10 +7,13 @@ import datetime
 from pathlib import Path
 import datetime # For pipeline duration
 import yaml
+from pathlib import PurePath   # base for PosixPath / WindowsPath
 
-yaml.SafeDumper.add_representer(
-    Path, lambda dumper, value: dumper.represent_scalar(
-        'tag:yaml.org,2002:str', str(value))
+# register once – covers Path, PosixPath, WindowsPath …
+yaml.SafeDumper.add_multi_representer(
+    PurePath,
+    lambda dumper, value: dumper.represent_scalar(
+        "tag:yaml.org,2002:str", str(value))
 )
 
 # ── make utils importable ────────────────────────────────────────────
