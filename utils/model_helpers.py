@@ -80,29 +80,3 @@ def fix_gemma3_checkpoint(ckpt_dir: str | Path) -> None:
 
     log.info("✓ Gemma-3 checkpoint repaired.")
     
-# utils/model_helpers.py  (or anywhere importable)
-def guard_gemma_loss(model):
-    """
-    Call once right after you've loaded (and, if using LoRA, PEFT-wrapped)
-    a Gemma-3 model.  Ensures every forward returns `.loss`, even when
-    labels=None.  Harmless for other models.
-    """
-    # unwrap PEFT if present
-    if model.__class__.__name__ == "PeftModel":
-        model = model.base_model.model
-
-    if not model.__class__.__name__.startswith("Gemma3"):
-        return                              # nothing to do
-
-    cls = model.__class__
-    if getattr(cls.forward, "_loss_guard", False):
-        return
-
-    old_fwd = cls.forward
-    def safe_fwd(self, *a, **kw):
-        out = old_fwd(self, *a, **kw)
-        if not hasattr(out, "loss"):
-            out.loss = None                # add stub once
-        return out
-    safe_fwd._loss_guard = True
-    cls.forward = safe_fwd

@@ -23,7 +23,7 @@ import os
 import math
 import json
 from utils.dataset_helpers import load_tdpo_dataset, load_tdpo_multi_dataset
-from utils.model_helpers import fix_gemma3_checkpoint, guard_gemma_loss
+from utils.model_helpers import fix_gemma3_checkpoint
 logger = logging.getLogger(__name__)
 
 def load_imports(use_unsloth):
@@ -384,8 +384,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 load_in_4bit=config['finetune_load_in_4bit'],
                 dtype=torch.bfloat16 if config['finetune_load_in_4bit'] and torch.cuda.is_bf16_supported() else None,
             )
-            guard_gemma_loss(model)
-            
+   
         except Exception as e:
             logger.error(f"Failed to load base model '{model_name}' or tokenizer for DPO: {e}", exc_info=True)
             return
