@@ -23,7 +23,7 @@ import os
 import math
 import json
 from utils.dataset_helpers import load_tdpo_dataset, load_tdpo_multi_dataset
-from utils.model_helpers import fix_gemma3_checkpoint, guard_gemma_loss_attr
+from utils.model_helpers import fix_gemma3_checkpoint, patch_gemma3_forward
 logger = logging.getLogger(__name__)
 
 def load_imports(use_unsloth):
@@ -48,7 +48,7 @@ def load_imports(use_unsloth):
         import transformers
 
         # monkey patch unsloth's monkeypatch
-        guard_gemma_loss_attr()
+        patch_gemma3_forward()
         
 
         # Make all imports available in the global scope        

@@ -80,23 +80,31 @@ def fix_gemma3_checkpoint(ckpt_dir: str | Path) -> None:
 
     log.info("✓ Gemma-3 checkpoint repaired.")
 
-def guard_gemma_loss_attr():
-    import inspect
-    import transformers.models.gemma3.modeling_gemma3 as gm
+import inspect, textwrap, types
+import transformers.models.gemma3.modeling_gemma3 as gm
 
+def patch_gemma3_forward():
     cls = getattr(gm, "Gemma3ForConditionalGeneration", None)
     if cls is None:
+        return                                      # Gemma-3 not present
+
+    # Avoid double-patching
+    if getattr(cls.forward, "_unsloth_loss_fix", False):
         return
 
-    orig_fwd = cls.forward
-    if getattr(orig_fwd, "_loss_guard", False):
-        return
+    orig_src = inspect.getsource(cls.forward)
+    # --- minimally edit the tail -------------------------------------
+    patched_src = orig_src.replace(
+        "loss = outputs.loss",
+        "loss = getattr(outputs, 'loss', loss)"      # <- only change
+    )
 
-    def safe_forward(self, *a, **kw):
-        out = orig_fwd(self, *a, **kw)
-        if not hasattr(out, "loss"):
-            out.loss = None
-        return out
+    # Compile the modified source into a function object
+    scope = {}
+    exec(textwrap.dedent(patched_src), cls.__dict__, scope)
+    fixed_forward = scope["forward"]
+    fixed_forward._unsloth_loss_fix = True          # sentinel
 
-    safe_forward._loss_guard = True
-    cls.forward = safe_forward          # ← plain assignment, NO MethodType
+    # Bind the function to the class
+    cls.forward = fixed_forward
+
