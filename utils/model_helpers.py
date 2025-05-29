@@ -81,22 +81,22 @@ def fix_gemma3_checkpoint(ckpt_dir: str | Path) -> None:
     log.info("✓ Gemma-3 checkpoint repaired.")
 
 def guard_gemma_loss_attr():
-    import types, inspect
+    import inspect
     import transformers.models.gemma3.modeling_gemma3 as gm
 
     cls = getattr(gm, "Gemma3ForConditionalGeneration", None)
     if cls is None:
-        return                          # Something really odd – bail
+        return
 
     orig_fwd = cls.forward
     if getattr(orig_fwd, "_loss_guard", False):
-        return                          # Already patched
+        return
 
-    def safe_forward(self, *args, **kw):
-        out = orig_fwd(self, *args, **kw)
-        if not hasattr(out, "loss"):    # add stub once
+    def safe_forward(self, *a, **kw):
+        out = orig_fwd(self, *a, **kw)
+        if not hasattr(out, "loss"):
             out.loss = None
         return out
 
     safe_forward._loss_guard = True
-    cls.forward = types.MethodType(safe_forward, cls)
+    cls.forward = safe_forward          # ← plain assignment, NO MethodType
