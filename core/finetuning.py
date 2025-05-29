@@ -47,9 +47,6 @@ def load_imports(use_unsloth):
         import os
         import transformers
 
-        # monkey patch unsloth's monkeypatch
-        patch_gemma3_forward()
-        
 
         # Make all imports available in the global scope        
         globals()['AutoTokenizer'] = AutoTokenizer
