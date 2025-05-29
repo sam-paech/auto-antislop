@@ -23,6 +23,7 @@ import os
 import math
 import json
 from utils.dataset_helpers import load_tdpo_dataset, load_tdpo_multi_dataset
+from utils.model_helpers import fix_gemma3_checkpoint
 logger = logging.getLogger(__name__)
 
 def load_imports(use_unsloth):
@@ -941,6 +942,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         max_shard_size="4GB",
     )
     tokenizer.save_pretrained(merged_dir)
+    fix_gemma3_checkpoint(merged_dir) # gemma3 models are saving weird.
     logger.info(f"Merged 16-bit model saved -> {merged_dir}")
 
     # --- Saving Model ---
