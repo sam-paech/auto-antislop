@@ -929,6 +929,13 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             device_map={"": "cpu"},
         )
         merged = model_fp16.merge_and_unload()  # pure fp16 torch.nn.Linear
+        # --- untie lm_head if it aliases embed_tokens -----------------
+        et = merged.model.embed_tokens
+        lh = merged.lm_head
+        if lh.weight.data_ptr() == et.weight.data_ptr():
+            lh.weight = torch.nn.Parameter(lh.weight.detach().clone())
+            merged.config.tie_word_embeddings = False
+            logger.info("Untied lm_head.weight from embed_tokens.weight")
     else:                                                   # TRAINED IN 16-BIT
         logger.info("Training was fp16/bf16 – merging in-place …")
         merged = model.merge_and_unload()       # still on GPU
