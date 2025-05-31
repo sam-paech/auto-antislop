@@ -108,7 +108,7 @@ def _build_generation_command(
         """Resolves a Path object to an absolute path string, or returns None."""
         return str(p.resolve()) if p else None
     
-    tdpo_pairs_jsonl_path_str = get_abs_path_str(output_jsonl_path.parent / f"iter_{str(iter_idx)}_tdpo_pairs.jsonl")
+    ftpo_pairs_jsonl_path_str = get_abs_path_str(output_jsonl_path.parent / f"iter_{str(iter_idx)}_ftpo_pairs.jsonl")
     experiment_dir = output_jsonl_path.parent.resolve()
 
     # Determine the API base URL for generation requests
@@ -185,7 +185,7 @@ def _build_generation_command(
         command.extend(["--regex-blocklist-file", ""])
     else:
         # this seems to overlap with another param, should fix
-        command.extend(["--tdpo-pairs-jsonl", tdpo_pairs_jsonl_path_str])
+        command.extend(["--ftpo-pairs-jsonl", ftpo_pairs_jsonl_path_str])
 
         # For iterations > 0, use the ban lists determined by the orchestrate_pipeline function.
         if banned_ngrams_file_for_iter:

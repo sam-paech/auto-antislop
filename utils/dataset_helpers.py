@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------
-# Parallel TDPO loader (single-token version)
+# Parallel ftpo loader (single-token version)
 # ------------------------------------------------------------------
 from __future__ import annotations
 import logging, random
@@ -13,7 +13,7 @@ from datasets import load_dataset
 logger = logging.getLogger(__name__)
 
 
-def load_tdpo_multi_dataset(
+def load_ftpo_multi_dataset(
     path: Path,
     tokenizer,
     *,
@@ -24,7 +24,7 @@ def load_tdpo_multi_dataset(
     batch_size: int = 512,           # adjust to your memory/CPU budget
 ):
     """
-    Parallel loader for the “multi-chosen” TDPO JSONL schema.
+    Parallel loader for the “multi-chosen” ftpo JSONL schema.
 
     Returns
     -------
@@ -136,6 +136,6 @@ def load_tdpo_multi_dataset(
     ds = ds.remove_columns("__valid")
 
     if len(ds) == 0:
-        raise ValueError("no TDPO-MULTI samples survived length / sanity checks")
+        raise ValueError("no ftpo-MULTI samples survived length / sanity checks")
 
     return ds.shuffle(seed=3407)

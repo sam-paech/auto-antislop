@@ -154,18 +154,18 @@ def main():
 
     finetune_group.add_argument(
         "--finetune-mode",
-        choices=["dpo", "tdpo-multi"],
+        choices=["dpo", "ftpo-multi"],
         default=None,
         help="dpo = vanilla DPO on full continuations (default); "
-            "tdpo = masked Tokenwise-DPO on partial generation pairs, only computing loss for the completion token."
+            "ftpo = masked Tokenwise-DPO on partial generation pairs, only computing loss for the completion token."
     )
     finetune_group.add_argument(
-        "--finetune-tdpo-dataset",
+        "--finetune-ftpo-dataset",
         type=Path,
         default=None,
-        help="(Optional) explicit path to a TDPO/last-token JSONL file. "
-            "If omitted and --finetune-mode is tdpo, the script will "
-            "pick the highest iter_*_tdpo_pairs.jsonl in the experiment dir."
+        help="(Optional) explicit path to a ftpo/last-token JSONL file. "
+            "If omitted and --finetune-mode is ftpo, the script will "
+            "pick the highest iter_*_ftpo_pairs.jsonl in the experiment dir."
     )
     finetune_group.add_argument(
         "--finetune-cuda-visible-devices",

@@ -94,7 +94,7 @@ _OVERREP: Sequence[str] = (
 
 _FINETUNE: Sequence[str] = (
     "finetune_mode",
-    "finetune_tdpo_dataset",
+    "finetune_ftpo_dataset",
     "finetune_base_model_id",
     "finetune_max_seq_length",
     "finetune_load_in_4bit",
@@ -116,7 +116,7 @@ _FINETUNE: Sequence[str] = (
     "finetune_save_merged_16bit",
     "finetune_save_gguf_q8_0",
     "finetune_max_train_examples",
-    "finetune_tdpo_sample_regularisation_strength",
+    "finetune_ftpo_sample_regularisation_strength",
     "finetune_cuda_visible_devices",
 )
 

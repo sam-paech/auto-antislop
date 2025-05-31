@@ -22,7 +22,7 @@ from pathlib import Path
 import os
 import math
 import json
-from utils.dataset_helpers import load_tdpo_multi_dataset
+from utils.dataset_helpers import load_ftpo_multi_dataset
 from utils.model_helpers import fix_gemma3_checkpoint, detie_lm_head
 logger = logging.getLogger(__name__)
 
@@ -199,7 +199,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     logger.info("Starting finetuning process...")
 
-    from core.last_token_dpo_trainer import LastTokenDPOTrainer, ThresholdStop, attach_agc
+    from core.last_token_dpo_trainer import LastTokenDPOTrainer, ThresholdStop
     
 
 
@@ -218,7 +218,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     
     # ── Select dataset path according to finetune_mode ───────────────────
-    mode = config.get("finetune_mode", "tdpo-multi").lower()   # expect "dpo" or "tdpo-multi"
+    mode = config.get("finetune_mode", "ftpo-multi").lower()   # expect "dpo" or "ftpo-multi"
     dataset_path = None
     # --- Model and Tokenizer Setup ---    
     max_seq_length = config['finetune_max_seq_length']
@@ -284,20 +284,20 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                         f"{after_len} remain.")
         logger.info(f"DPO dataset ready with {after_len} samples.")
 
-    elif mode == "tdpo-multi":
-        if config.get("finetune_tdpo_dataset"):
-            dataset_path = Path(config["finetune_tdpo_dataset"])
+    elif mode == "ftpo-multi":
+        if config.get("finetune_ftpo_dataset"):
+            dataset_path = Path(config["finetune_ftpo_dataset"])
         else:
-            tdpo_files = sorted(experiment_run_dir.glob("iter_*_tdpo_pairs.jsonl"))
-            if not tdpo_files:
-                logger.error("No TDPO files found for TDPO-MULTI.")
+            ftpo_files = sorted(experiment_run_dir.glob("iter_*_ftpo_pairs.jsonl"))
+            if not ftpo_files:
+                logger.error("No ftpo files found for ftpo-MULTI.")
                 return
-            dataset_path = tdpo_files[-1]
+            dataset_path = ftpo_files[-1]
 
-        dpo_dataset_hf = load_tdpo_multi_dataset(
+        dpo_dataset_hf = load_ftpo_multi_dataset(
             dataset_path, tokenizer,
             max_seq_len=max_seq_length,
-            rule_reg_strength    = config.get("finetune_tdpo_sample_regularisation_strength", 0.0),
+            rule_reg_strength    = config.get("finetune_ftpo_sample_regularisation_strength", 0.0),
         )
         
         dpo_dataset_hf = dpo_dataset_hf.shuffle(seed=config.get("finetune_shuffle_seed", 3407))
@@ -309,11 +309,11 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         
         # ──────────────────────────────────────────────────────────────
         # [DEBUG] Inspect last-5 prompt tokens + chosen / rejected token
-        #         –– prints up to 50 TDPO examples for a quick sanity check.
-        #         –– gated by new config flag `finetune_debug_tdpo_tokens`.
+        #         –– prints up to 50 ftpo examples for a quick sanity check.
+        #         –– gated by new config flag `finetune_debug_ftpo_tokens`.
         # ──────────────────────────────────────────────────────────────
         sample_n = min(50, len(dpo_dataset_hf))
-        print(f"\n🔎 TDPO-multi debug: showing {sample_n} examples "
+        print(f"\n🔎 ftpo-multi debug: showing {sample_n} examples "
             "(last-5 prompt tokens, chosen ▸ rejected)\n")
         for i, ex in enumerate(dpo_dataset_hf.select(range(sample_n))):
             tail_prompt = tokenizer.convert_ids_to_tokens(ex["prompt_ids"][-5:])
@@ -321,10 +321,10 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             rejected_tok = tokenizer.convert_ids_to_tokens([ex["rejected_token_id"]])[0]
             tail_str = " ".join(tail_prompt)
             print(f"{i:03d}: … {tail_str}  →  {chosen_tok} ▸ {rejected_tok}")
-        print("\n—— end TDPO-multi debug ——\n")
+        print("\n—— end ftpo-multi debug ——\n")
 
     else:
-        logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'tdpo-multi'.")
+        logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'ftpo-multi'.")
         return
     
         
@@ -411,7 +411,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     CALC_VAL_STATS = True
     N_VAL_ITEMS = 50
     if CALC_VAL_STATS:
-        def _collate_tdpo(features, pad_id: int, max_len: int):
+        def _collate_ftpo(features, pad_id: int, max_len: int):
             """
             Validation-time collator – left-pads so the final real token is
             always at position -1, matching the training collator.
@@ -429,7 +429,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 prompt_ids[i, -seq.size(0):] = seq    # left-pad
                 attn_mask [i, -seq.size(0):] = True
 
-            # ── TDPO-MULTI path ──────────────────────────
+            # ── ftpo-MULTI path ──────────────────────────
             max_c = max(len(f["chosen_ids"]) for f in features)
             chosen_pad  = torch.full((B, max_c), -100, dtype=torch.long)
             chosen_mask = torch.zeros_like(chosen_pad, dtype=torch.bool)
@@ -533,7 +533,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         analysis_dir.mkdir(exist_ok=True)
 
         pad_id = tokenizer.pad_token_id
-        collate = lambda feats: _collate_tdpo(feats, pad_id, max_seq_length)
+        collate = lambda feats: _collate_ftpo(feats, pad_id, max_seq_length)
 
 
         if True: # skip this check for now
@@ -617,12 +617,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         config["finetune_learning_rate"] = lr
         print(f"Auto‑scaled LR (N={N}, w={w:.3f}) = {lr:.3e}")
 
-
-    #if True or config["finetune_load_in_4bit"]:
-    #    attach_agc(model, clip=config.get("finetune_agc_clip", 0.01))
-
-
-    TrainerClass = LastTokenDPOTrainer if mode.lower() in ["tdpo-multi"] else DPOTrainer
+    TrainerClass = LastTokenDPOTrainer if mode.lower() in ["ftpo-multi"] else DPOTrainer
 
     if use_unsloth:
         optimiser_str = "adamw_8bit"

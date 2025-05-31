@@ -120,7 +120,7 @@ class EarlyStoppingByMetric(TrainerCallback):
 
 class LastTokenDPOTrainer(DPOTrainer):
     """
-    Trainer for “single-next-token” (TDPO) preference learning.
+    Trainer for “single-next-token” (ftpo) preference learning.
     Replaces TRL’s standard loss with a log-ratio on the **last**
     autoregressive position and stays agnostic to model head names.
     """
@@ -129,7 +129,7 @@ class LastTokenDPOTrainer(DPOTrainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.remove_unused_columns = False
-        self.data_collator = self.tdpo_collator                    # override
+        self.data_collator = self.ftpo_collator                    # override
 
     # ──────────────────────────────────────────────────────────────
     @staticmethod
@@ -148,7 +148,7 @@ class LastTokenDPOTrainer(DPOTrainer):
         return proj
 
     # ──────────────────────────────────────────────────────────────
-    def tdpo_collator(self, features):
+    def ftpo_collator(self, features):
         """
         Left-pads every prompt to `self.args.max_length`, so the last real
         token is always at position -1.  That lets the loss read logits
@@ -176,7 +176,7 @@ class LastTokenDPOTrainer(DPOTrainer):
             rejected_token_id = torch.tensor([f["rejected_token_id"] for f in features]),
         )
 
-        # ── TDPO-MULTI vs single-token branch ────────────────────────
+        # ── ftpo-MULTI vs single-token branch ────────────────────────
         max_c = max(len(f["chosen_ids"]) for f in features)
         chosen_pad  = torch.full((batch_sz, max_c), -100, dtype=torch.long)
         chosen_mask = torch.zeros_like(chosen_pad, dtype=torch.bool)
@@ -239,7 +239,7 @@ class LastTokenDPOTrainer(DPOTrainer):
         logp_all = F.log_softmax(logits_last, dim=-1)  # [B, V]
 
 
-        if inputs.get("chosen_ids") is not None: # tdpo-multi path
+        if inputs.get("chosen_ids") is not None: # ftpo-multi path
             # --- unpack ----------------------------------------------------------------
             ch_ids  = inputs["chosen_ids"].to(device)       # [B,C]
             ch_mask = inputs["chosen_mask"].to(device)      # [B,C] bool
@@ -280,7 +280,7 @@ class LastTokenDPOTrainer(DPOTrainer):
             weights  = torch.where(zero_row, ch_mask.float(), weights)
 
             # ---------------------------------------------------------------------------
-            #  Per-token preference loss (TDPO-MULTI) – honours "probs" vs "logits"
+            #  Per-token preference loss (ftpo-MULTI) – honours "probs" vs "logits"
             # ---------------------------------------------------------------------------
             weights_sum = weights.sum(dim=-1, keepdim=True)               # [B,1]
             batch_rows  = torch.arange(B, device=ids.device).unsqueeze(1)
@@ -315,7 +315,7 @@ class LastTokenDPOTrainer(DPOTrainer):
 
 
         # ───────────────────────────────────────────────────────────────────
-        #  Variant-specific preference term (single-token TDPO)
+        #  Variant-specific preference term (single-token ftpo)
         # ───────────────────────────────────────────────────────────────────
         if inputs.get("chosen_ids") is None:
             if LOSS_CALC_MODE == "probs":
@@ -359,7 +359,7 @@ class LastTokenDPOTrainer(DPOTrainer):
             # 2. element-wise KL on *non-target* vocab  (old behaviour)
             # --------------------------------------------------------------
             freeze_mask = torch.ones_like(logits_last, dtype=torch.bool)
-            if "chosen_ids" in inputs:                 # TDPO-MULTI
+            if "chosen_ids" in inputs:                 # ftpo-MULTI
                 freeze_mask.scatter_(1, ch_ids,  False)
             else:                                      # single-token
                 freeze_mask.scatter_(1, chosen.unsqueeze(-1), False)
@@ -418,7 +418,7 @@ class LastTokenDPOTrainer(DPOTrainer):
             loss = pref_loss
 
 
-        if inputs.get("chosen_ids") is not None:        # TDPO-MULTI
+        if inputs.get("chosen_ids") is not None:        # ftpo-MULTI
             # log-probs for each chosen token, same shape as ch_ids
             lp_chosen = logp_all.gather(-1, ch_ids)               # [B,C]
             lp_bad    = logp_bad.unsqueeze(-1)                    # [B,1]
@@ -427,7 +427,7 @@ class LastTokenDPOTrainer(DPOTrainer):
             wins_tok  = (lp_chosen > lp_bad) & ch_mask            # [B,C] bool
             frac_win  = wins_tok.float().sum(-1) / ch_mask.sum(-1).clamp(min=1e-8)  # [B]
             choice_win = frac_win.mean().detach()                 # scalar
-        else:                                        # TDPO single
+        else:                                        # ftpo single
             choice_win = (logp_good > logp_bad).float().mean().detach()        
 
         metrics = {
@@ -449,28 +449,3 @@ class LastTokenDPOTrainer(DPOTrainer):
     # ----------------------------------------------------------
     def _prepare_dataset(self, dataset, *args, **_):
         return dataset
-    
-
-class AGCTrainer(LastTokenDPOTrainer):
-    def __init__(self, *args, agc_clip: float = 0.01, agc_eps: float = 1e-3,
-                 **kwargs):
-        super().__init__(*args, **kwargs)
-        self.agc_clip = agc_clip
-        self.agc_eps  = agc_eps
-
-    # HF calls this right after .backward() and before optimizer.step()
-    def clip_gradients(self, accelerator, model, max_grad_norm=None):
-        print('clipping grads')
-        clip = self.agc_clip
-        eps  = self.agc_eps
-
-        for p in model.parameters():
-            if p.grad is None:
-                continue
-            # ||θ|| and ||g||
-            param_norm = p.detach().norm()
-            grad_norm  = p.grad.norm()
-
-            max_norm = clip * (param_norm + eps)
-            if grad_norm > max_norm:
-                p.grad.mul_(max_norm / (grad_norm + 1e-6))
