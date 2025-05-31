@@ -79,4 +79,25 @@ def fix_gemma3_checkpoint(ckpt_dir: str | Path) -> None:
         json.dump(idx, f, indent=2)
 
     log.info("✓ Gemma-3 checkpoint repaired.")
+
+
+# fully detie lm_head from embeddings so safetensors can flatten
+def detie_lm_head(model):
+    import torch
+
+    emb = model.get_input_embeddings()      # nn.Embedding
+    lm  = model.lm_head                     # nn.Linear
+
+    # already untied?
+    if lm.weight.data_ptr() != emb.weight.data_ptr():
+        return
+
+    vocab_size, hidden_size = emb.weight.shape
+    new_head = torch.nn.Linear(hidden_size, vocab_size, bias=False)
+    new_head.weight = torch.nn.Parameter(emb.weight.detach().clone())
+    new_head.to(next(model.parameters()).dtype)   # keep fp16/bf16
+
+    model.lm_head = new_head
+    model.config.tie_word_embeddings = False
+
     
