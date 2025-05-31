@@ -177,19 +177,15 @@ class LastTokenDPOTrainer(DPOTrainer):
         )
 
         # ── TDPO-MULTI vs single-token branch ────────────────────────
-        if "chosen_ids" in features[0]:
-            max_c = max(len(f["chosen_ids"]) for f in features)
-            chosen_pad  = torch.full((batch_sz, max_c), -100, dtype=torch.long)
-            chosen_mask = torch.zeros_like(chosen_pad, dtype=torch.bool)
-            for i, f in enumerate(features):
-                ids = torch.tensor(f["chosen_ids"], dtype=torch.long)
-                chosen_pad [i, :ids.size(0)] = ids
-                chosen_mask[i, :ids.size(0)] = True
-            batch.update(chosen_ids = chosen_pad,
-                        chosen_mask = chosen_mask)
-        else:
-            batch.update(chosen_token_id = torch.tensor([f["chosen_token_id"]
-                                                        for f in features]))
+        max_c = max(len(f["chosen_ids"]) for f in features)
+        chosen_pad  = torch.full((batch_sz, max_c), -100, dtype=torch.long)
+        chosen_mask = torch.zeros_like(chosen_pad, dtype=torch.bool)
+        for i, f in enumerate(features):
+            ids = torch.tensor(f["chosen_ids"], dtype=torch.long)
+            chosen_pad [i, :ids.size(0)] = ids
+            chosen_mask[i, :ids.size(0)] = True
+        batch.update(chosen_ids = chosen_pad,
+                    chosen_mask = chosen_mask)
 
         return batch
 
@@ -198,7 +194,6 @@ class LastTokenDPOTrainer(DPOTrainer):
 
     # --------------------------------------------------------------------- #
     #  Allowed modes:
-    #     "ref"   – reference-tethered preference loss
     #     "free"  – untethered (raw Δ)
     #     "clip"  – odds-ratio clipping with ε
     # --------------------------------------------------------------------- #

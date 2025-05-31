@@ -22,7 +22,7 @@ from pathlib import Path
 import os
 import math
 import json
-from utils.dataset_helpers import load_tdpo_dataset, load_tdpo_multi_dataset
+from utils.dataset_helpers import load_tdpo_multi_dataset
 from utils.model_helpers import fix_gemma3_checkpoint, detie_lm_head
 logger = logging.getLogger(__name__)
 
@@ -218,7 +218,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     
     # ── Select dataset path according to finetune_mode ───────────────────
-    mode = config.get("finetune_mode", "tdpo-multi").lower()   # expect "dpo" or "tdpo" or "tdpo-multi"
+    mode = config.get("finetune_mode", "tdpo-multi").lower()   # expect "dpo" or "tdpo-multi"
     dataset_path = None
     # --- Model and Tokenizer Setup ---    
     max_seq_length = config['finetune_max_seq_length']
@@ -284,51 +284,6 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                         f"{after_len} remain.")
         logger.info(f"DPO dataset ready with {after_len} samples.")
 
-    elif mode == "tdpo":
-        # single-token preference pairs
-        if config.get("finetune_tdpo_dataset"):
-            dataset_path = Path(config["finetune_tdpo_dataset"])
-        else:
-            tdpo_files = sorted(experiment_run_dir.glob("iter_*_tdpo_pairs.jsonl"))
-            if not tdpo_files:
-                logger.error("No iter_*_tdpo_pairs.jsonl files found for TDPO.")
-                return
-            dataset_path = tdpo_files[-1]          # most recent iteration
-
-        if not dataset_path.is_file():
-            logger.error(f"TDPO dataset not found at {dataset_path}")
-            return
-
-        # defer actual loading until tokenizer is ready
-        tdpo_dataset_path = dataset_path
-        dpo_dataset_hf = load_tdpo_dataset(
-            tdpo_dataset_path, tokenizer,
-            max_seq_len          = max_seq_length,
-            rule_reg_strength    = config.get("finetune_tdpo_sample_regularisation_strength", 0.0),
-        )
-        dpo_dataset_hf = dpo_dataset_hf.shuffle(seed=config.get("finetune_shuffle_seed", 3407))
-        max_train = config.get("finetune_max_train_examples")
-        if isinstance(max_train, int) and max_train > 0 and len(dpo_dataset_hf) > max_train:
-            dpo_dataset_hf = dpo_dataset_hf.select(range(max_train))
-            logger.info(f"Capped training dataset to {max_train} examples.")
-
-        
-        # ──────────────────────────────────────────────────────────────
-        # [DEBUG] Inspect last-5 prompt tokens + chosen / rejected token
-        #         –– prints up to 50 TDPO examples for a quick sanity check.
-        #         –– gated by new config flag `finetune_debug_tdpo_tokens`.
-        # ──────────────────────────────────────────────────────────────
-        sample_n = min(50, len(dpo_dataset_hf))
-        print(f"\n🔎 TDPO debug: showing {sample_n} examples "
-            "(last-5 prompt tokens, chosen ▸ rejected)\n")
-        for i, ex in enumerate(dpo_dataset_hf.select(range(sample_n))):
-            tail_prompt = tokenizer.convert_ids_to_tokens(ex["prompt_ids"][-5:])
-            chosen_tok  = tokenizer.convert_ids_to_tokens([ex["chosen_token_id"]])[0]
-            rejected_tok = tokenizer.convert_ids_to_tokens([ex["rejected_token_id"]])[0]
-            tail_str = " ".join(tail_prompt)
-            print(f"{i:03d}: … {tail_str}  →  {chosen_tok} ▸ {rejected_tok}")
-        print("\n—— end TDPO debug ——\n")
-
     elif mode == "tdpo-multi":
         if config.get("finetune_tdpo_dataset"):
             dataset_path = Path(config["finetune_tdpo_dataset"])
@@ -369,7 +324,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         print("\n—— end TDPO-multi debug ——\n")
 
     else:
-        logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'tdpo'.")
+        logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'tdpo-multi'.")
         return
     
         
@@ -434,40 +389,6 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         
         
 
-    
-
-
-
-
-    
-    # Hard-disable gradient-checkpointing for TDPO
-    if False and mode in ["tdpo", "tdpo-multi"]:
-        #model.config._attn_implementation = "flash_attention_2"
-        # turn off every ckpt flag Unsloth uses
-        if hasattr(model, "gradient_checkpointing_disable"):
-            model.gradient_checkpointing_disable()
-            print('gradient checkpointing disabled!')
-        if hasattr(model, "gradient_checkpointing_enable"):
-            model.gradient_checkpointing_disable()
-            print("✓ Disabled gradient checkpointing for better compilation")
-        for mod in model.modules():
-            if hasattr(mod, "gradient_checkpointing"):
-                print('module disabled gradient checkpointing!')
-                mod.gradient_checkpointing = False
-        if hasattr(model.config, "gradient_checkpointing"):
-            print('attempting to disable gradient checkpionting in config')
-            model.config.gradient_checkpointing = False
-        #model = model.to(model.device)
-        if False:
-            # 1. HF flag
-            if getattr(model, "gradient_checkpointing", False):
-                model.gradient_checkpointing_disable()           # HF helper
-            # 2. Unsloth compiled blocks keep their own flag
-            if hasattr(model, "model") and hasattr(model.model, "gradient_checkpointing"):
-                model.model.gradient_checkpointing = False
-            if hasattr(model.config, "gradient_checkpointing"):
-                model.config.gradient_checkpointing = False
-
     if use_unsloth:
         model = FastLanguageModel.get_peft_model(
             model,
@@ -481,16 +402,6 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             max_seq_length=max_seq_length,
         )
 
-    if False and mode in ["tdpo", "tdpo-multi"]:
-        #model.config._attn_implementation = "flash_attention_2"
-        # turn off every ckpt flag Unsloth uses
-        if hasattr(model, "gradient_checkpointing_disable"):
-            model.gradient_checkpointing_disable()
-        for mod in model.modules():
-            if hasattr(mod, "gradient_checkpointing"):
-                mod.gradient_checkpointing = False
-        if hasattr(model.config, "gradient_checkpointing"):
-            model.config.gradient_checkpointing = False
 
 
     print("⇢  trainable params:",
@@ -518,19 +429,16 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 prompt_ids[i, -seq.size(0):] = seq    # left-pad
                 attn_mask [i, -seq.size(0):] = True
 
-            # ── TDPO-MULTI vs single-token path ──────────────────────────
-            if "chosen_ids" in features[0]:              # multi-chosen
-                max_c = max(len(f["chosen_ids"]) for f in features)
-                chosen_pad  = torch.full((B, max_c), -100, dtype=torch.long)
-                chosen_mask = torch.zeros_like(chosen_pad, dtype=torch.bool)
-                for i, f in enumerate(features):
-                    ids = torch.tensor(f["chosen_ids"], dtype=torch.long)
-                    chosen_pad [i, :ids.size(0)] = ids
-                    chosen_mask[i, :ids.size(0)] = True
-                batch = dict(chosen_ids=chosen_pad, chosen_mask=chosen_mask)
-            else:                                        # single-token TDPO
-                batch = dict(chosen_token_id=torch.tensor(
-                            [f["chosen_token_id"] for f in features]))
+            # ── TDPO-MULTI path ──────────────────────────
+            max_c = max(len(f["chosen_ids"]) for f in features)
+            chosen_pad  = torch.full((B, max_c), -100, dtype=torch.long)
+            chosen_mask = torch.zeros_like(chosen_pad, dtype=torch.bool)
+            for i, f in enumerate(features):
+                ids = torch.tensor(f["chosen_ids"], dtype=torch.long)
+                chosen_pad [i, :ids.size(0)] = ids
+                chosen_mask[i, :ids.size(0)] = True
+            batch = dict(chosen_ids=chosen_pad, chosen_mask=chosen_mask)
+
 
             # ── always include rejected & prompt tensors ─────────────────
             batch.update(
@@ -565,33 +473,23 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                         logits_next = model(ids, attention_mask=attn).logits[:, -1, :]
                         logp_all    = torch.log_softmax(logits_next, -1)
 
-                    # ----- variant detection -------------------------------------------------
-                    if "chosen_ids" in batch:                             # TDPO-MULTI
-                        ch_ids  = batch["chosen_ids"].to(device)          # [B, C]
-                        ch_mask = batch["chosen_mask"].to(device)         # [B, C]  bool
 
-                        # log-prob of every chosen token
-                        lp_chosen = logp_all.gather(-1, ch_ids)           # [B, C]
+                    ch_ids  = batch["chosen_ids"].to(device)          # [B, C]
+                    ch_mask = batch["chosen_mask"].to(device)         # [B, C]  bool
 
-                        # log-prob of the rejected token (same for all C columns)
-                        lp_bad = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)  # [B]
+                    # log-prob of every chosen token
+                    lp_chosen = logp_all.gather(-1, ch_ids)           # [B, C]
 
-                        # per-token wins (True if chosen beats rejected)
-                        wins_tok = (lp_chosen > lp_bad.unsqueeze(-1)) & ch_mask      # [B, C] bool
+                    # log-prob of the rejected token (same for all C columns)
+                    lp_bad = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)  # [B]
 
-                        # fraction of winners for each training example
-                        frac_win = wins_tok.float().sum(-1) / ch_mask.sum(-1)        # [B]
+                    # per-token wins (True if chosen beats rejected)
+                    wins_tok = (lp_chosen > lp_bad.unsqueeze(-1)) & ch_mask      # [B, C] bool
 
-                        delta = frac_win                        # use fraction as the “margin”
-                    else:                                        # TDPO single-token
-                        ch      = batch["chosen_token_id"].to(device)
-                        lp_good = logp_all.gather(-1, ch.unsqueeze(-1)).squeeze(-1)  # [B]
-                        lp_bad  = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1) # [B]
-                        delta   = (lp_good > lp_bad).float()        # 1 if win, 0 if loss
+                    # fraction of winners for each training example
+                    frac_win = wins_tok.float().sum(-1) / ch_mask.sum(-1)        # [B]
 
-
-                    #lp_bad  = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)
-                    #delta   = lp_good - lp_bad
+                    delta = frac_win                        # use fraction as the “margin”
 
                     tot_delta += delta.sum().item()     # for mean_delta
                     wins      += delta.sum().item()     # for chosen_win
@@ -724,8 +622,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     #    attach_agc(model, clip=config.get("finetune_agc_clip", 0.01))
 
 
-    TrainerClass = LastTokenDPOTrainer if mode.lower() in ["tdpo", "tdpo-multi"] else DPOTrainer
-    #TrainerClass = AGCTrainer if mode.lower() in {"tdpo", "tdpo-multi"} else DPOTrainer
+    TrainerClass = LastTokenDPOTrainer if mode.lower() in ["tdpo-multi"] else DPOTrainer
+
     if use_unsloth:
         optimiser_str = "adamw_8bit"
     else:        

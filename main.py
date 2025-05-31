@@ -154,7 +154,7 @@ def main():
 
     finetune_group.add_argument(
         "--finetune-mode",
-        choices=["dpo", "tdpo"],
+        choices=["dpo", "tdpo-multi"],
         default=None,
         help="dpo = vanilla DPO on full continuations (default); "
             "tdpo = masked Tokenwise-DPO on partial generation pairs, only computing loss for the completion token."
