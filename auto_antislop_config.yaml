@@ -136,7 +136,7 @@ top_n_repetition_stat: 50 # N-grams from each category to track for repetition s
 # --- Finetuning (Optional) ---
 finetune_enabled: true
 finetune_use_unsloth: false
-finetune_mode: "ftpo-multi" # dpo / ftpo (tokenwise-dpo)
+finetune_mode: "ftpo" # dpo / ftpo (tokenwise-dpo)
 finetune_ftpo_dataset: "" # you can specify an existing ftpo dataset, or let the pipeline use the one produced in the generation step
 finetune_base_model_id: "unsloth/gemma-3-4b-it" # Base model for DPO
 finetune_max_seq_length: 1500 # this may truncate some outputs

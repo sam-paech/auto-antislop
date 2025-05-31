@@ -136,6 +136,6 @@ def load_ftpo_multi_dataset(
     ds = ds.remove_columns("__valid")
 
     if len(ds) == 0:
-        raise ValueError("no ftpo-MULTI samples survived length / sanity checks")
+        raise ValueError("no ftpo samples survived length / sanity checks")
 
     return ds.shuffle(seed=3407)

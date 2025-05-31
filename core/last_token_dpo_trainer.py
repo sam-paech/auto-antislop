@@ -176,7 +176,7 @@ class LastTokenDPOTrainer(DPOTrainer):
             rejected_token_id = torch.tensor([f["rejected_token_id"] for f in features]),
         )
 
-        # ── ftpo-MULTI vs single-token branch ────────────────────────
+        # ── ftpo vs single-token branch ────────────────────────
         max_c = max(len(f["chosen_ids"]) for f in features)
         chosen_pad  = torch.full((batch_sz, max_c), -100, dtype=torch.long)
         chosen_mask = torch.zeros_like(chosen_pad, dtype=torch.bool)
@@ -239,7 +239,7 @@ class LastTokenDPOTrainer(DPOTrainer):
         logp_all = F.log_softmax(logits_last, dim=-1)  # [B, V]
 
 
-        if inputs.get("chosen_ids") is not None: # ftpo-multi path
+        if inputs.get("chosen_ids") is not None: # ftpo path
             # --- unpack ----------------------------------------------------------------
             ch_ids  = inputs["chosen_ids"].to(device)       # [B,C]
             ch_mask = inputs["chosen_mask"].to(device)      # [B,C] bool
@@ -280,7 +280,7 @@ class LastTokenDPOTrainer(DPOTrainer):
             weights  = torch.where(zero_row, ch_mask.float(), weights)
 
             # ---------------------------------------------------------------------------
-            #  Per-token preference loss (ftpo-MULTI) – honours "probs" vs "logits"
+            #  Per-token preference loss (ftpo) – honours "probs" vs "logits"
             # ---------------------------------------------------------------------------
             weights_sum = weights.sum(dim=-1, keepdim=True)               # [B,1]
             batch_rows  = torch.arange(B, device=ids.device).unsqueeze(1)
@@ -359,7 +359,7 @@ class LastTokenDPOTrainer(DPOTrainer):
             # 2. element-wise KL on *non-target* vocab  (old behaviour)
             # --------------------------------------------------------------
             freeze_mask = torch.ones_like(logits_last, dtype=torch.bool)
-            if "chosen_ids" in inputs:                 # ftpo-MULTI
+            if "chosen_ids" in inputs:                 # ftpo
                 freeze_mask.scatter_(1, ch_ids,  False)
             else:                                      # single-token
                 freeze_mask.scatter_(1, chosen.unsqueeze(-1), False)
@@ -418,7 +418,7 @@ class LastTokenDPOTrainer(DPOTrainer):
             loss = pref_loss
 
 
-        if inputs.get("chosen_ids") is not None:        # ftpo-MULTI
+        if inputs.get("chosen_ids") is not None:        # ftpo
             # log-probs for each chosen token, same shape as ch_ids
             lp_chosen = logp_all.gather(-1, ch_ids)               # [B,C]
             lp_bad    = logp_bad.unsqueeze(-1)                    # [B,1]

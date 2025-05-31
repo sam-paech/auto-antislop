@@ -218,7 +218,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     
     # ── Select dataset path according to finetune_mode ───────────────────
-    mode = config.get("finetune_mode", "ftpo-multi").lower()   # expect "dpo" or "ftpo-multi"
+    mode = config.get("finetune_mode", "ftpo").lower()   # expect "dpo" or "ftpo"
     dataset_path = None
     # --- Model and Tokenizer Setup ---    
     max_seq_length = config['finetune_max_seq_length']
@@ -284,13 +284,13 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                         f"{after_len} remain.")
         logger.info(f"DPO dataset ready with {after_len} samples.")
 
-    elif mode == "ftpo-multi":
+    elif mode == "ftpo":
         if config.get("finetune_ftpo_dataset"):
             dataset_path = Path(config["finetune_ftpo_dataset"])
         else:
             ftpo_files = sorted(experiment_run_dir.glob("iter_*_ftpo_pairs.jsonl"))
             if not ftpo_files:
-                logger.error("No ftpo files found for ftpo-MULTI.")
+                logger.error("No ftpo files found for ftpo.")
                 return
             dataset_path = ftpo_files[-1]
 
@@ -313,7 +313,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         #         –– gated by new config flag `finetune_debug_ftpo_tokens`.
         # ──────────────────────────────────────────────────────────────
         sample_n = min(50, len(dpo_dataset_hf))
-        print(f"\n🔎 ftpo-multi debug: showing {sample_n} examples "
+        print(f"\n🔎 ftpo debug: showing {sample_n} examples "
             "(last-5 prompt tokens, chosen ▸ rejected)\n")
         for i, ex in enumerate(dpo_dataset_hf.select(range(sample_n))):
             tail_prompt = tokenizer.convert_ids_to_tokens(ex["prompt_ids"][-5:])
@@ -321,10 +321,10 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             rejected_tok = tokenizer.convert_ids_to_tokens([ex["rejected_token_id"]])[0]
             tail_str = " ".join(tail_prompt)
             print(f"{i:03d}: … {tail_str}  →  {chosen_tok} ▸ {rejected_tok}")
-        print("\n—— end ftpo-multi debug ——\n")
+        print("\n—— end ftpo debug ——\n")
 
     else:
-        logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'ftpo-multi'.")
+        logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'ftpo'.")
         return
     
         
@@ -429,7 +429,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 prompt_ids[i, -seq.size(0):] = seq    # left-pad
                 attn_mask [i, -seq.size(0):] = True
 
-            # ── ftpo-MULTI path ──────────────────────────
+            # ── ftpo path ──────────────────────────
             max_c = max(len(f["chosen_ids"]) for f in features)
             chosen_pad  = torch.full((B, max_c), -100, dtype=torch.long)
             chosen_mask = torch.zeros_like(chosen_pad, dtype=torch.bool)
@@ -617,7 +617,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         config["finetune_learning_rate"] = lr
         print(f"Auto‑scaled LR (N={N}, w={w:.3f}) = {lr:.3e}")
 
-    TrainerClass = LastTokenDPOTrainer if mode.lower() in ["ftpo-multi"] else DPOTrainer
+    TrainerClass = LastTokenDPOTrainer if mode.lower() in ["ftpo"] else DPOTrainer
 
     if use_unsloth:
         optimiser_str = "adamw_8bit"
