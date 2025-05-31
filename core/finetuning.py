@@ -943,7 +943,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         max_shard_size="4GB",
     )
     tokenizer.save_pretrained(merged_dir)
-    fix_gemma3_checkpoint(merged_dir) # gemma3 models are saving weird.
+    #fix_gemma3_checkpoint(merged_dir) # gemma3 models are saving weird.
     logger.info(f"Merged 16-bit model saved -> {merged_dir}")
 
     # --- Saving Model ---
