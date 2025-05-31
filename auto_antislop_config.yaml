@@ -162,6 +162,7 @@ finetune_output_dir_suffix: "_tdpo_exp01" # Appended to experiment run dir
 finetune_save_merged_16bit: true
 finetune_save_gguf_q8_0: false
 finetune_max_train_examples: 1000 # adjust as needed
+finetune_shuffle_seed: 666
 # --- TDPO sample regularisation
 # 0 = off; 0.9 strongly downsamples overrepresented rule violations
 # (this is useful because the raw generated dataset is typically very skewed)

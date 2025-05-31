@@ -207,7 +207,7 @@ class LastTokenDPOTrainer(DPOTrainer):
         clip_epsilon_probs  = getattr(self, "clip_epsilon_probs", 0.2)
         clip_epsilon_logits  = getattr(self, "clip_epsilon_logits", 2)
         beta = getattr(self, "beta", 0.1)
-        lambda_kl = getattr(self, "lambda_kl", 0.2)
+        lambda_kl = getattr(self, "lambda_kl", 0.4)
         use_target_kl   = getattr(self, "use_target_kl", True)
         lambda_kl_tgt   = getattr(self, "lambda_kl_target", 0.1)
 
@@ -339,7 +339,7 @@ class LastTokenDPOTrainer(DPOTrainer):
                 pref_loss = -F.logsigmoid(beta * delta).mean()
 
 
-                extra_metrics = {}
+        extra_metrics = {}
 
         # ── total loss & metrics ------------------------------------------
         if USE_KL_LOSS:
