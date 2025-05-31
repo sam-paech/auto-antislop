@@ -203,15 +203,16 @@ class LastTokenDPOTrainer(DPOTrainer):
     #     "clip"  – odds-ratio clipping with ε
     # --------------------------------------------------------------------- #
     def compute_loss(self, model, inputs, return_outputs=False, **_):
-        mode = getattr(self, "loss_mode", "clip")
-        clip_epsilon_probs  = getattr(self, "clip_epsilon_probs", 0.2)
-        clip_epsilon_logits  = getattr(self, "clip_epsilon_logits", 2)
-        beta = getattr(self, "beta", 0.1)
-        lambda_kl = getattr(self, "lambda_kl", 0.4)
-        use_target_kl   = getattr(self, "use_target_kl", True)
-        lambda_kl_tgt   = getattr(self, "lambda_kl_target", 0.1)
+        mode = getattr(self, "loss_mode", "clip") # "clip" | "free": determines whether we clip loss contributions per the ratio of rejected/chosen logits (like orpo)        
+        beta = getattr(self, "beta", 0.1) # loss scaling
+        lambda_kl_target   = getattr(self, "lambda_kl_target", 0.1) # how strongly target (chosen/rejected) logits are tethered to reference via kl loss
+        tau_kl_target = getattr(self, "tau_kl_target", 2.0)  # allow the target logits some grace to move before kl loss kicks in
+        lambda_kl = getattr(self, "lambda_kl", 0.4) # how strongly the remaining vocab (other than chosen/rejected) is tethered to reference via kl loss
 
         LOSS_CALC_MODE = getattr(self, "loss_calc_mode", "logits")    # probs / logits. Use probs or logits in the loss function. logits is more surgical (doesn't affect the whole logit distribution).
+        clip_epsilon_probs  = getattr(self, "clip_epsilon_probs", 0.2) # (when in probs mode): loss contribution is clipped if (chosen - rejected) probs delta is above this
+        clip_epsilon_logits  = getattr(self, "clip_epsilon_logits", 2) # (when in logits mode): loss contribution is clipped if (chosen - rejected) logits delta is above this
+
         USE_KL_LOSS=True # tether all the logits other than the ones we are interested in moving to the reference
 
         # ── unpack ---------------------------------------------------------
@@ -385,7 +386,7 @@ class LastTokenDPOTrainer(DPOTrainer):
             #       independently of one another.
             # --------------------------------------------------------------            
 
-            if use_target_kl:
+            if lambda_kl_target:
                 tgt_mask = torch.zeros_like(logits_last, dtype=torch.bool)
                 if "chosen_ids" in inputs:
                     tgt_mask.scatter_(1, ch_ids, True)
@@ -396,21 +397,25 @@ class LastTokenDPOTrainer(DPOTrainer):
                 tgt_sz      = tgt_mask.sum(-1).clamp(min=1)        # avoid /0
                 mean_cur    = (logits_last * tgt_mask).sum(-1) / tgt_sz
                 mean_ref    = (ref_logits_last * tgt_mask).sum(-1) / tgt_sz
-                kl_tgt_raw  = (mean_cur - mean_ref).pow(2).mean()
+
+                # give the target logits some grace to move around before kl penalty kicks in                
+                diff = mean_cur - mean_ref                      # [B]
+                excess = torch.clamp(diff.abs() - tau_kl_target, min=0.0) # zero inside ±tau
+                kl_tgt_raw = excess.pow(2).mean()               # quadratic outside band
+
             else:
                 kl_tgt_raw  = logits_last.new_tensor(0.0)
 
             # --------------------------------------------------------------
             # 4. combine
             # --------------------------------------------------------------
-            kl_loss = lambda_kl * kl_elem_raw + lambda_kl_tgt * kl_tgt_raw
+            kl_loss = lambda_kl * kl_elem_raw + lambda_kl_target * kl_tgt_raw
             loss    = pref_loss + kl_loss
 
             # diagnostics
             extra_metrics.update({
                 "kl_elem"        : kl_elem_raw.detach(),
                 "kl_tgt"         : kl_tgt_raw.detach(),
-                "freeze_frac"    : freeze_mask.float().mean().detach(),
                 "kl_pref_ratio"  : (kl_loss / (pref_loss + 1e-8)).detach(),
             })
 
