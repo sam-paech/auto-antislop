@@ -208,6 +208,8 @@ class LastTokenDPOTrainer(DPOTrainer):
         clip_epsilon_logits  = getattr(self, "clip_epsilon_logits", 2)
         beta = getattr(self, "beta", 0.1)
         lambda_kl = getattr(self, "lambda_kl", 0.2)
+        use_target_kl   = getattr(self, "use_target_kl", True)
+        lambda_kl_tgt   = getattr(self, "lambda_kl_target", 0.1)
 
         LOSS_CALC_MODE = getattr(self, "loss_calc_mode", "logits")    # probs / logits. Use probs or logits in the loss function. logits is more surgical (doesn't affect the whole logit distribution).
         USE_KL_LOSS=True # tether all the logits other than the ones we are interested in moving to the reference
@@ -337,11 +339,13 @@ class LastTokenDPOTrainer(DPOTrainer):
                 pref_loss = -F.logsigmoid(beta * delta).mean()
 
 
-        extra_metrics = {}
+                extra_metrics = {}
+
         # ── total loss & metrics ------------------------------------------
         if USE_KL_LOSS:
-            # applies kl loss to every logit *except* those in chosen/rejected.
-            # this allows our target logits to move freely while constraining weight updates globally
+            # --------------------------------------------------------------
+            # 1. reference logits (no-grad)
+            # --------------------------------------------------------------
             with torch.no_grad():
                 if self.ref_model is None:
                     with self.null_ref_context():
@@ -355,47 +359,64 @@ class LastTokenDPOTrainer(DPOTrainer):
                         use_cache=False, return_dict=True,
                     ).logits[:, -1, :]
 
+            # --------------------------------------------------------------
+            # 2. element-wise KL on *non-target* vocab  (old behaviour)
+            # --------------------------------------------------------------
             freeze_mask = torch.ones_like(logits_last, dtype=torch.bool)
-            if "chosen_ids" in inputs:
+            if "chosen_ids" in inputs:                 # TDPO-MULTI
                 freeze_mask.scatter_(1, ch_ids,  False)
-            else:
+            else:                                      # single-token
                 freeze_mask.scatter_(1, chosen.unsqueeze(-1), False)
             freeze_mask.scatter_(1, rej.unsqueeze(-1), False)
 
             if LOSS_CALC_MODE == "logits":
-                # --- L2 penalty on raw logits (no softmax) ---------------------
-                diff     = logits_last - ref_logits_last
-                kl_part  = (freeze_mask * diff.pow(2)).sum()
-                kl_loss  = kl_part / freeze_mask.sum()               # MSE on frozen logits
+                diff        = logits_last - ref_logits_last
+                kl_elem_raw = (freeze_mask * diff.pow(2)).sum() / freeze_mask.sum()
             else:
-                # --- standard forward-KL in prob space ------------------------
-                ref_logp_all = F.log_softmax(ref_logits_last, dim=-1)
-                logp_all     = F.log_softmax(logits_last,      dim=-1)
-                kl_part      = (freeze_mask * ref_logp_all.exp()
-                                        * (ref_logp_all - logp_all)).sum()
-                kl_loss      = kl_part / freeze_mask.sum()
+                ref_lp      = F.log_softmax(ref_logits_last, dim=-1)
+                cur_lp      = F.log_softmax(logits_last,      dim=-1)
+                kl_elem_raw = (freeze_mask * ref_lp.exp() * (ref_lp - cur_lp)).sum()
+                kl_elem_raw = kl_elem_raw / freeze_mask.sum()
 
-            # ── extra diagnostics ─────────────────────────────────────────────
-            freeze_frac    = freeze_mask.float().mean()                # how much of V is KL-regularised
-            kl_pref_ratio  = kl_loss / (pref_loss + 1e-8)              # relative weight of KL vs pref
+            # --------------------------------------------------------------
+            # 3. *Optional* aggregate KL on the target tokens only
+            #       This pulls target token logits towards basline
+            #       but only *on aggregate* so they can still move
+            #       independently of one another.
+            # --------------------------------------------------------------            
 
-            # ── diagnostic ratios ─────────────────────────────────────────────
-            pref_eps            = 1e-4          # or smaller if you like
-            safe_pref_loss      = torch.clamp(pref_loss.detach(), min=pref_eps)
+            if use_target_kl:
+                tgt_mask = torch.zeros_like(logits_last, dtype=torch.bool)
+                if "chosen_ids" in inputs:
+                    tgt_mask.scatter_(1, ch_ids, True)
+                else:
+                    tgt_mask.scatter_(1, chosen.unsqueeze(-1), True)
+                tgt_mask.scatter_(1, rej.unsqueeze(-1), True)
 
-            kl_pref_ratio_raw   = kl_loss / safe_pref_loss
-            kl_pref_ratio       = lambda_kl * kl_pref_ratio_raw
+                tgt_sz      = tgt_mask.sum(-1).clamp(min=1)        # avoid /0
+                mean_cur    = (logits_last * tgt_mask).sum(-1) / tgt_sz
+                mean_ref    = (ref_logits_last * tgt_mask).sum(-1) / tgt_sz
+                kl_tgt_raw  = (mean_cur - mean_ref).pow(2).mean()
+            else:
+                kl_tgt_raw  = logits_last.new_tensor(0.0)
 
-            extra_metrics = {
-                "kl_loss"            : kl_loss.detach(),        # un-scaled
-                "freeze_frac"        : freeze_frac.detach(),
-                "kl_pref_ratio"      : kl_pref_ratio.detach(),  # scaled (what actually matters)
-            }
+            # --------------------------------------------------------------
+            # 4. combine
+            # --------------------------------------------------------------
+            kl_loss = lambda_kl * kl_elem_raw + lambda_kl_tgt * kl_tgt_raw
+            loss    = pref_loss + kl_loss
 
-            loss = pref_loss + lambda_kl * kl_loss                           # λ≈0.02 usually enough
+            # diagnostics
+            extra_metrics.update({
+                "kl_elem"        : kl_elem_raw.detach(),
+                "kl_tgt"         : kl_tgt_raw.detach(),
+                "freeze_frac"    : freeze_mask.float().mean().detach(),
+                "kl_pref_ratio"  : (kl_loss / (pref_loss + 1e-8)).detach(),
+            })
 
         else:
             loss = pref_loss
+
 
         if inputs.get("chosen_ids") is not None:        # TDPO-MULTI
             # log-probs for each chosen token, same shape as ch_ids
