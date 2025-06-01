@@ -835,7 +835,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     merged.save_pretrained(
         merged_dir,
         safe_serialization=True,                # *.safetensors shards
-        max_shard_size="5B",
+        max_shard_size="5GB",
     )
     tokenizer.save_pretrained(merged_dir)
     fix_gemma3_checkpoint(merged_dir) # gemma3 models are saving weird.
