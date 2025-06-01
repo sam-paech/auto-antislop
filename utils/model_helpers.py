@@ -116,6 +116,8 @@ def detie_lm_head(model):
     if path is None:               # very unusual, but fall back to "lm_head"
         path = "lm_head"
 
+    print('!!', name)
+    
     # ------------------------------------------------------------------
     # install the new head at that path
     # ------------------------------------------------------------------
