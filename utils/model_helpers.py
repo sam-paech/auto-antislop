@@ -83,21 +83,57 @@ def fix_gemma3_checkpoint(ckpt_dir: str | Path) -> None:
 
 # fully detie lm_head from embeddings so safetensors can flatten
 def detie_lm_head(model):
+    """
+    Untie the logits projection from the input embeddings and register it
+    *exactly* where the model (and loaders like vLLM) expect it.
+
+    Works with HF models whose output head is either `lm_head` or some
+    nested attribute (e.g. `language_model.output_projection` in Gemma-3).
+    """
     import torch
+    from types import SimpleNamespace
 
-    emb = model.get_input_embeddings()      # nn.Embedding
-    lm  = model.lm_head                     # nn.Linear
+    emb = model.get_input_embeddings()          # nn.Embedding
+    old_head = model.get_output_embeddings()    # whatever Linear HF exposes
 
-    # already untied?
-    if lm.weight.data_ptr() != emb.weight.data_ptr():
+    # nothing to do if they are already separate tensors
+    if old_head.weight.data_ptr() != emb.weight.data_ptr():
         return
 
     vocab_size, hidden_size = emb.weight.shape
     new_head = torch.nn.Linear(hidden_size, vocab_size, bias=False)
     new_head.weight = torch.nn.Parameter(emb.weight.detach().clone())
-    new_head.to(next(model.parameters()).dtype)   # keep fp16/bf16
+    new_head.to(next(model.parameters()).dtype)
 
-    model.lm_head = new_head
+    # ------------------------------------------------------------------
+    # find the *attribute path* of the existing output head
+    # ------------------------------------------------------------------
+    path = None
+    for name, module in model.named_modules():
+        if module is old_head:
+            path = name            # e.g. "lm_head" or "language_model.output_projection"
+            break
+    if path is None:               # very unusual, but fall back to "lm_head"
+        path = "lm_head"
+
+    # ------------------------------------------------------------------
+    # install the new head at that path
+    # ------------------------------------------------------------------
+    def set_by_path(root, dotted_name, value):
+        parts = dotted_name.split(".")
+        parent = root
+        for p in parts[:-1]:
+            parent = getattr(parent, p)
+        setattr(parent, parts[-1], value)
+
+    set_by_path(model, path, new_head)
+
+    # HF convenience: if the public attribute `lm_head` *is not* the main path,
+    # mirror it so code expecting `model.lm_head` still works. This does *not*
+    # duplicate weights – both names reference the same nn.Linear instance.
+    #if path != "lm_head":
+    #    model.lm_head = new_head
+
     model.config.tie_word_embeddings = False
 
     
