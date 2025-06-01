@@ -185,3 +185,44 @@ def retie_gemma3_and_prune_alias(model):
     # ── drop the top-level alias so it won't be serialised ─────────────
     if hasattr(model, "lm_head"):
         delattr(model, "lm_head")
+
+
+# ------------------------------------------------------------------
+#  Gemma-3 helper: detie + relabel head for vLLM + safetensors
+# ------------------------------------------------------------------
+def prepare_gemma3_for_save(model):
+    """
+    • Makes the output projection an independent tensor if it still shares
+      storage with the embeddings.
+    • Registers it at `language_model.lm_head` (the path vLLM uses).
+    • Deletes the top-level `lm_head` alias so no `lm_head.*` key is saved.
+    • Sets `tie_word_embeddings=False` so Transformers knows they’re untied.
+    """
+    import torch.nn as nn, torch
+
+    if (getattr(model.config, "model_type", "") or "").lower() != "gemma3":
+        return
+
+    emb  = model.get_input_embeddings()
+    head = model.get_output_embeddings()           # this is model.lm_head
+
+    # 1. Detie if they still share storage
+    if head.weight.data_ptr() == emb.weight.data_ptr():
+        vocab, hidden = emb.weight.shape
+        new_head = nn.Linear(hidden, vocab, bias=False)
+        new_head.weight = nn.Parameter(emb.weight.detach().clone())
+        new_head.to(next(model.parameters()).dtype)
+        head = new_head
+
+    # 2. Ensure `language_model` wrapper exists
+    if not hasattr(model, "language_model"):
+        model.add_module("language_model", nn.Module())
+
+    # 3. Register under vLLM path
+    model.language_model.add_module("lm_head", head)
+
+    # 4. Drop the alias so no `lm_head.*` key lands in the state-dict
+    if hasattr(model, "lm_head"):
+        delattr(model, "lm_head")
+
+    model.config.tie_word_embeddings = False

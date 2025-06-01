@@ -23,7 +23,7 @@ import os
 import math
 import json
 from utils.dataset_helpers import load_ftpo_multi_dataset
-from utils.model_helpers import fix_gemma3_checkpoint, detie_lm_head, retie_gemma3_and_prune_alias
+from utils.model_helpers import fix_gemma3_checkpoint, detie_lm_head, prepare_gemma3_for_save
 logger = logging.getLogger(__name__)
 
 def load_imports(use_unsloth):
@@ -824,7 +824,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         )
         merged = model_fp16.merge_and_unload()  # pure fp16 torch.nn.Linear
         #detie_lm_head(merged)
-        retie_gemma3_and_prune_alias(merged)
+        prepare_gemma3_for_save(merged)
         logger.info("Untied lm_head.weight from embed_tokens.weight")
     else:                                                   # TRAINED IN 16-BIT
         logger.info("Training was fp16/bf16 – merging in-place …")
@@ -835,7 +835,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     merged.save_pretrained(
         merged_dir,
         safe_serialization=True,                # *.safetensors shards
-        max_shard_size="4GB",
+        max_shard_size="5B",
     )
     tokenizer.save_pretrained(merged_dir)
     fix_gemma3_checkpoint(merged_dir) # gemma3 models are saving weird.
