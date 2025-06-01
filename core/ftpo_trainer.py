@@ -178,7 +178,7 @@ class FTPOTrainer(DPOTrainer):
 
         # ── ftpo vs single-token branch ────────────────────────
         max_c = max(len(f["chosen_ids"]) for f in features)
-        chosen_pad  = torch.full((batch_sz, max_c), -100, dtype=torch.long)
+        chosen_pad = torch.full((batch_sz, max_c), pad_id, dtype=torch.long)
         chosen_mask = torch.zeros_like(chosen_pad, dtype=torch.bool)
         for i, f in enumerate(features):
             ids = torch.tensor(f["chosen_ids"], dtype=torch.long)
