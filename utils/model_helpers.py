@@ -117,7 +117,7 @@ def detie_lm_head(model):
         path = "lm_head"
 
     print('!!', name)
-    
+
     # ------------------------------------------------------------------
     # install the new head at that path
     # ------------------------------------------------------------------
@@ -138,4 +138,39 @@ def detie_lm_head(model):
 
     model.config.tie_word_embeddings = False
 
-    
+
+# --------------------------------------------------------------------
+#  restore Gemma-3’s weight-tying and ensure only the embed_tokens
+#  key lands in the safetensors index (no lm_head, no duplication)
+# --------------------------------------------------------------------
+def retie_gemma3_and_prune_alias(model):
+    """
+    • Re-establish weight tying between output-projection and embeddings
+      if we detied earlier.
+    • Remove the `lm_head` attribute so that `state_dict()` cannot emit
+      an 'lm_head.*' key.  HF will fall back to
+      'language_model.model.embed_tokens.weight', exactly as in the
+      original checkpoint.
+
+    Call this *immediately before* `model.save_pretrained(...)`.
+    """
+    cfg_type = (getattr(model.config, "model_type", "") or "").lower()
+    if cfg_type != "gemma3":
+        return  # skip for non-Gemma models
+
+    # Gemma hierarchy: model.language_model.output_projection  ⇄  lm_head
+    lm_mod = getattr(model, "language_model", None)
+    if lm_mod is None or not hasattr(lm_mod, "output_projection"):
+        raise RuntimeError("Cannot locate output_projection in Gemma model")
+
+    emb = model.get_input_embeddings()
+    proj = lm_mod.output_projection
+
+    # Re-tie if we previously cloned the weights
+    if proj.weight.data_ptr() != emb.weight.data_ptr():
+        proj.weight = emb.weight       # share the storage
+    model.config.tie_word_embeddings = True
+
+    # Drop the alias so it won’t appear in the state-dict
+    if hasattr(model, "lm_head"):
+        delattr(model, "lm_head")
