@@ -219,7 +219,7 @@ def prepare_gemma3_for_save(model):
         model.add_module("language_model", nn.Module())
 
     # 3. Register under vLLM path
-    model.language_model.add_module("lm_head", head)
+    #model.language_model.add_module("lm_head", head)
 
     # 4. Drop the alias so no `lm_head.*` key lands in the state-dict
     if hasattr(model, "lm_head"):
