@@ -143,34 +143,45 @@ def detie_lm_head(model):
 #  restore Gemma-3’s weight-tying and ensure only the embed_tokens
 #  key lands in the safetensors index (no lm_head, no duplication)
 # --------------------------------------------------------------------
+# ---------------------------------------------------------------
+#  Gemma-3: keep weight-tying *and* give vLLM the path it wants
+# ---------------------------------------------------------------
 def retie_gemma3_and_prune_alias(model):
     """
-    • Re-establish weight tying between output-projection and embeddings
-      if we detied earlier.
-    • Remove the `lm_head` attribute so that `state_dict()` cannot emit
-      an 'lm_head.*' key.  HF will fall back to
-      'language_model.model.embed_tokens.weight', exactly as in the
-      original checkpoint.
+    Re-establish tying between embeddings and logits projection and ensure
+    the projection is reachable at `language_model.output_projection`.
+    Removes the top-level `lm_head` alias so the serializer never emits
+    an `lm_head.*` key.
 
-    Call this *immediately before* `model.save_pretrained(...)`.
+    Call just before `save_pretrained(...)`.
     """
-    cfg_type = (getattr(model.config, "model_type", "") or "").lower()
-    if cfg_type != "gemma3":
-        return  # skip for non-Gemma models
+    import torch.nn as nn
 
-    # Gemma hierarchy: model.language_model.output_projection  ⇄  lm_head
-    lm_mod = getattr(model, "language_model", None)
-    if lm_mod is None or not hasattr(lm_mod, "output_projection"):
-        raise RuntimeError("Cannot locate output_projection in Gemma model")
+    if (getattr(model.config, "model_type", "") or "").lower() != "gemma3":
+        return  # skip for anything that isn't Gemma-3
 
-    emb = model.get_input_embeddings()
-    proj = lm_mod.output_projection
+    emb  = model.get_input_embeddings()          # nn.Embedding
+    proj = getattr(model, "lm_head", None)       # HF always defines this
 
-    # Re-tie if we previously cloned the weights
+    if proj is None or not isinstance(proj, nn.Linear):
+        raise RuntimeError("Could not find lm_head on Gemma-3 model")
+
+    # ── tie weights if they were detied earlier ─────────────────────────
     if proj.weight.data_ptr() != emb.weight.data_ptr():
-        proj.weight = emb.weight       # share the storage
+        proj.weight = emb.weight      # share storage again
     model.config.tie_word_embeddings = True
 
-    # Drop the alias so it won’t appear in the state-dict
+    # ── ensure wrapper + attribute for vLLM ────────────────────────────
+    # 1. make / fetch `model.language_model`
+    if not hasattr(model, "language_model"):
+        wrapper = nn.Module()
+        model.add_module("language_model", wrapper)
+    else:
+        wrapper = model.language_model
+
+    # 2. register projection inside wrapper
+    wrapper.add_module("output_projection", proj)
+
+    # ── drop the top-level alias so it won't be serialised ─────────────
     if hasattr(model, "lm_head"):
         delattr(model, "lm_head")
