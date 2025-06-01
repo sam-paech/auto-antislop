@@ -118,11 +118,11 @@ class EarlyStoppingByMetric(TrainerCallback):
 
 
 
-class LastTokenDPOTrainer(DPOTrainer):
+class FTPOTrainer(DPOTrainer):
     """
-    Trainer for “single-next-token” (ftpo) preference learning.
+    Trainer for final token preference optimisation (ftpo).
     Replaces TRL’s standard loss with a log-ratio on the **last**
-    autoregressive position and stays agnostic to model head names.
+    autoregressive position.
     """
 
     # ──────────────────────────────────────────────────────────────

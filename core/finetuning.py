@@ -199,7 +199,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
     logger.info("Starting finetuning process...")
 
-    from core.last_token_dpo_trainer import LastTokenDPOTrainer, ThresholdStop
+    from core.ftpo_trainer import FTPOTrainer, ThresholdStop
     
 
 
@@ -617,7 +617,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         config["finetune_learning_rate"] = lr
         print(f"Auto‑scaled LR (N={N}, w={w:.3f}) = {lr:.3e}")
 
-    TrainerClass = LastTokenDPOTrainer if mode.lower() in ["ftpo"] else DPOTrainer
+    TrainerClass = FTPOTrainer if mode.lower() in ["ftpo"] else DPOTrainer
 
     if use_unsloth:
         optimiser_str = "adamw_8bit"
