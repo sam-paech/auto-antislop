@@ -411,6 +411,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     CALC_VAL_STATS = True
     N_VAL_ITEMS = 50
     if CALC_VAL_STATS:
+        pad_id = tokenizer.pad_token_id
         def _collate_ftpo(features, pad_id: int, max_len: int):
             """
             Validation-time collator – left-pads so the final real token is
@@ -478,7 +479,10 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                     ch_mask = batch["chosen_mask"].to(device)         # [B, C]  bool
 
                     # log-prob of every chosen token
-                    lp_chosen = logp_all.gather(-1, ch_ids)           # [B, C]
+                    safe_ch_ids = ch_ids.clone()
+                    safe_ch_ids[~ch_mask] = pad_id        # any valid id is fine
+                    lp_chosen   = logp_all.gather(-1, safe_ch_ids)
+
 
                     # log-prob of the rejected token (same for all C columns)
                     lp_bad = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)  # [B]
@@ -531,8 +535,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         # ────────────────────────────────────────────────────────────────────
         analysis_dir = experiment_run_dir / "logprob_gap_analysis"
         analysis_dir.mkdir(exist_ok=True)
-
-        pad_id = tokenizer.pad_token_id
+        
         collate = lambda feats: _collate_ftpo(feats, pad_id, max_seq_length)
 
 
