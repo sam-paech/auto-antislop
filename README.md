@@ -195,6 +195,75 @@ This script automatically searches for the most recent `merged_16bit` model in t
 *   **`slop-forensics`**: (Path: `slop-forensics/`)
     *   Provides tools and algorithms for analyzing text to identify various types of "slop," including over-represented n-grams and common undesirable phrases.
 
+
+### 📖 FTPO explained
+
+FTPO (Final-Token Preference Optimisation) is a narrow-scope preference-training step that only touches the single next-token position and avoids training on the preceding context. The intent is to push probability mass **away from the first token of a banned phrase (the *rejected* token)** and **toward one or more viable alternatives (the *chosen* tokens)** while leaving the rest of the model distribution largely intact.
+
+---
+
+#### 1. How a training example is created
+
+1. **Generation runs with banning active.**
+   In the auto-antislop pipeline, the FTPO dataset is generated in iterations > 0, when antislop is actively banning slop that it surfaced during the first iteration. Whenever the sampler encounters a banned n-gram / phrase / regex, it halts and constructs a training example before resuming inference with a non-banned continuation.
+
+2. **Rejected token.**
+   The would-have-been next token (the first token of the banned phrase) is stored as the `rejected` continuation token.
+
+3. **Chosen tokens.**
+   The sampler then draws further candidates for that same position, applying a *min-p* filter ¹ to keep only continuations whose tail probability mass is above a given threshold, to ensure they are coherent. These candidates are further filtered per the banned phrases list. The remaining tokens are stored as the `chosen` continuation tokens in the sample.
+
+   * If no alternative passes the filter the event is discarded and no FTPO sample is written.
+
+4. **Context.**
+   The full prompt (and any chat template markers) up to but **not including** the banned token is stored.
+   This means the model receives identical context for both the rejected and chosen tokens.
+
+Result: a single JSONL line contains the shared context plus one rejected token and a small set of chosen tokens — exactly the information FTPO needs.
+
+---
+
+#### 2. Loss formulation
+
+* **Preference term.**
+  For each example the trainer computes
+  `Δ = logit(chosen) − logit(rejected)` (or the equivalent in probability space).
+  The loss is `−log σ(β Δ)` in “free” mode or a clipped variant in “clip” mode. Or in plain English, the amount that all the chosen logits are beating the rejected, averaged across chosen tokens for that sample.
+  This encourages the model to rank *every* chosen token above the rejected one.
+  Once a chosen logit is beating rejected by a given margin, it no longer contributes to the loss. This helps to avoid unnecessarily moving the weights when chosen is already winning.
+
+* **Two-part KL regulariser.**
+  A key part of the loss function is the KL loss, which is split into two terms:
+
+  ```
+  λ_kl · KL_non-target + λ_kl_target · KL_target
+  ```
+
+  Where "target" refers to the chosen & rejected logits.
+
+   – **KL\_target**: We need the target logits to move significantly, in order to suppress the top "slop" logit and let the other candidates win. So they cannot be naively constrained to the reference, like they would be with ordinary KL loss. Instead, we define this `kl_target` term as the *mean* divergence from reference of the chosen + rejected set. This allows these logits more freedom to move relative to each other, while still being overall anchored to the reference.
+   The target logits are also allowed some grace to move before kl loss kicks in, per the `tau_kl_target` parameter. So small logit shifts in the target tokens are free but large shifts are penalised quadratically.
+   – **KL\_non-target**: This loss term applies exclusively to the rest of the vocabulary (all tokens not in {chosen ∪ rejected}). This is the traditional kl loss idea from DPO which constrains those logits to the reference.
+
+  This split lets the model reorder the chosen/rejected logits relative to each other while avoiding unwanted drift elsewhere.
+
+
+ 
+
+---
+
+#### 3. Why this matches Auto-Antislop’s goal
+
+* Banning logic already identifies *precisely* which token is undesirable; FTPO acts at that same granularity.
+* Because the rest of the vocabulary is regularised, stylistic and semantic behaviour outside the specific slop token is preserved.
+* The min-p filter ensures that only alternatives likely to form coherent continuations are rewarded, so the model learns “choose a sensible non-slop word here” rather than “choose any rare tail token”.
+
+---
+
+¹ *min-p sampler: see* *Nguyen et al., “Turning Up the Heat: Min-p Sampling for Creative and Coherent LLM Outputs” (arXiv:2407.01082).*
+
+
+
 ## 💡 Notes & Troubleshooting
 
 *   **GPU Memory:** Running vLLM and finetuning (especially with larger models) requires significant GPU VRAM. Adjust `vllm_gpu_memory_utilization` and finetuning batch sizes/quantization accordingly. If running both on the same GPU, the script attempts to stop vLLM before finetuning to free up VRAM.
