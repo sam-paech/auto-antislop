@@ -198,13 +198,13 @@ This script automatically searches for the most recent `merged_16bit` model in t
 
 ### 📖 FTPO explained
 
-FTPO (Final-Token Preference Optimisation) is a narrow-scope preference-training step that only touches the single next-token position and avoids training on the preceding context. The intent is to push probability mass **away from the first token of a banned phrase (the *rejected* token)** and **toward one or more viable alternatives (the *chosen* tokens)** while leaving the rest of the model distribution largely intact.
+FTPO (Final-Token Preference Optimisation) is a surgical preference optimisation training algorithm that constrains gradient updates to just a rejected/chosen *continuation token*, and avoids training on the preceding context. The intent is to push probability mass **away from the first token of a banned phrase (the *rejected* token)** and **toward one or more viable alternatives (the *chosen* tokens)** while leaving the rest of the model distribution largely intact.
 
 ---
 
-#### 1. How a training example is created
+#### 1. How a training example is created in the Auto-Antislop pipeline
 
-1. **Generation runs with banning active.**
+1. **Generation runs with antislop active.**
    In the auto-antislop pipeline, the FTPO dataset is generated in iterations > 0, when antislop is actively banning slop that it surfaced during the first iteration. Whenever the sampler encounters a banned n-gram / phrase / regex, it halts and constructs a training example before resuming inference with a non-banned continuation.
 
 2. **Rejected token.**
@@ -248,9 +248,6 @@ Result: a single JSONL line contains the shared context plus one rejected token 
   This split lets the model reorder the chosen/rejected logits relative to each other while avoiding unwanted drift elsewhere.
 
 
-Add the following block just after the **Loss formulation** section.
-
-
 #### 3. FTPO Tunable hyper-parameters
 
 * **`loss_mode`**
@@ -284,14 +281,6 @@ Add the following block just after the **Loss formulation** section.
   Grace band for **KL\_target**. Shifts of ≤ `tau_kl_target` are free; beyond that the quadratic penalty kicks in.
 
  
-
----
-
-#### 3. Why this matches Auto-Antislop’s goal
-
-* Banning logic already identifies *precisely* which token is undesirable; FTPO acts at that same granularity.
-* Because the rest of the vocabulary is regularised, stylistic and semantic behaviour outside the specific slop token is preserved.
-* The min-p filter ensures that only alternatives likely to form coherent continuations are rewarded, so the model learns “choose a sensible non-slop word here” rather than “choose any rare tail token”.
 
 ---
 
