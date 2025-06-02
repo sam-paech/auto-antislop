@@ -5,10 +5,10 @@ Auto-Antislop is an automated pipeline designed to iteratively refine text gener
 The core idea is to:
 1.  Generate text using a base model.
 2.  Analyze this text against a human baseline and its own patterns to identify "slop."
-3.  Create ban lists (n-grams, phrases, regex).
-4.  Re-generate text, this time actively penalizing or preventing the generation of banned content.
-5.  Repeat analysis and ban list updates for several iterations.
-6.  Create a preference dataset where generations from the final, "anti-slopped" iteration are "chosen" and baseline generations are "rejected."
+3.  Automatically create ban lists (n-grams, phrases, regex).
+4.  Re-generate text, this time actively preventing the generation of banned phrases/n-grams identified in the earlier step using antislop backtracking.
+5.  Optionally repeat analysis / antislop generation / ban list updates for several iterations.
+6.  Create a preference dataset constituting examples of the inference so far, plus a `rejected` continuation token and several `chosen` alternate continuation tokens.
 7.  Finetune the base model on this preference dataset using DPO or FTPO.
 
 ## 🌟 Key Features
@@ -247,6 +247,41 @@ Result: a single JSONL line contains the shared context plus one rejected token 
 
   This split lets the model reorder the chosen/rejected logits relative to each other while avoiding unwanted drift elsewhere.
 
+
+Add the following block just after the **Loss formulation** section.
+
+
+#### 3. FTPO Tunable hyper-parameters
+
+* **`loss_mode`**
+  `"clip"` (default) or `"free"`.
+
+  * **clip** – applies the epsilon thresholds below so that, once a chosen token is comfortably ahead of the rejected one, its contribution to the loss is capped.
+  * **free** – uses the raw `−log σ(β Δ)` everywhere; stronger gradients but higher risk of overshooting.
+
+* **`beta`** *(float, default 0.1)*
+  Scales the preference term. Smaller values dampen gradients; larger values make the model push logit differences more aggressively.
+
+* **`LOSS_CALC_MODE`**
+  `"logits"` (default) or `"probs"`.
+
+  * **logits** – works directly in logit space; only the local logits move, leaving the softmax normalisation unchanged for the rest of the vocab.
+  * **probs** – converts to probabilities first; gentler, but every token’s prob is indirectly affected by the softmax.
+
+* **`clip_epsilon_logits`** *(float, default 2)*
+  When in `"logits"` mode and `loss_mode="clip"`, the loss stops growing once `logit(chosen) − logit(rejected)` exceeds this value.
+
+* **`clip_epsilon_probs`** *(float, default 0.2)*
+  Analogous threshold for `"probs"` mode, defined on probability differences.
+
+* **`lambda_kl`** *(float, default 0.4)*
+  Weight of **KL\_non-target** – keeps all *other* vocabulary logits near the reference model.
+
+* **`lambda_kl_target`** *(float, default 0.1)*
+  Weight of **KL\_target** – steadies the *mean* of the chosen + rejected set.
+
+* **`tau_kl_target`** *(float, default 2.0)*
+  Grace band for **KL\_target**. Shifts of ≤ `tau_kl_target` are free; beyond that the quadratic penalty kicks in.
 
  
 
