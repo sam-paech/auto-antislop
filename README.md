@@ -241,9 +241,10 @@ Result: a single JSONL line contains the shared context plus one rejected token 
 
   Where "target" refers to the chosen & rejected logits.
 
-   – **KL\_target**: We need the target logits to move significantly, in order to suppress the top "slop" logit and let the other candidates win. So they cannot be naively constrained to the reference, like they would be with ordinary KL loss. Instead, we define this `kl_target` term as the *mean* divergence from reference of the chosen + rejected set. This allows these logits more freedom to move relative to each other, while still being overall anchored to the reference.
+   * **KL\_target**: We need the target logits to move significantly, in order to suppress the top "slop" logit and let the other candidates win. So they cannot be naively constrained to the reference, like they would be with ordinary KL loss. Instead, we define this `kl_target` term as the *mean* divergence from reference of the chosen + rejected set. This allows these logits more freedom to move relative to each other, while still being overall anchored to the reference.
    The target logits are also allowed some grace to move before kl loss kicks in, per the `tau_kl_target` parameter. So small logit shifts in the target tokens are free but large shifts are penalised quadratically.
-   – **KL\_non-target**: This loss term applies exclusively to the rest of the vocabulary (all tokens not in {chosen ∪ rejected}). This is the traditional kl loss idea from DPO which constrains those logits to the reference.
+
+   * **KL\_non-target**: This loss term applies exclusively to the rest of the vocabulary (all tokens not in {chosen ∪ rejected}). This is the traditional kl loss idea from DPO which constrains those logits to the reference.
 
   This split lets the model reorder the chosen/rejected logits relative to each other while avoiding unwanted drift elsewhere.
 
