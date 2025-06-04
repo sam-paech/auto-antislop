@@ -661,6 +661,27 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         ),
     )
 
+    # ------------------------------------------------------------------
+    # Inject FTPO-specific h-params from config (if we’re in FTPO mode)
+    # ------------------------------------------------------------------
+    if mode == "ftpo":
+        # names used inside FTPOTrainer.compute_loss
+        _ftpo_keys = [
+            "loss_mode",
+            "beta",
+            "lambda_kl_target",
+            "tau_kl_target",
+            "lambda_kl",
+            "loss_calc_mode",
+            "clip_epsilon_probs",
+            "clip_epsilon_logits",
+        ]
+        for k in _ftpo_keys:
+            cfg_key = f"finetune_ftpo_{k}"
+            if cfg_key in config and config[cfg_key] is not None:
+                setattr(dpo_trainer, k, config[cfg_key])
+    # ------------------------------------------------------------------
+
     if config.get("finetune_early_stopping_wins", None):
         dpo_trainer.add_callback(
             ThresholdStop("choice_win",
