@@ -299,7 +299,7 @@ class FTPOTrainer(DPOTrainer):
                 ratio_tok   = torch.exp(delta_tok)
                 clipped_tok = torch.minimum(ratio_tok,
                                             torch.tensor(1.0 + eps, device=ratio_tok.device))
-                per_tok_loss = -torch.log(clipped_tok / (1.0 + eps))
+                per_tok_loss = -torch.log( (clipped_tok + 1e-12) / (1.0 + eps) )
             else:  # "free"
                 per_tok_loss = -F.logsigmoid(beta * delta_tok)
 
@@ -360,7 +360,7 @@ class FTPOTrainer(DPOTrainer):
             # --------------------------------------------------------------
             freeze_mask = torch.ones_like(logits_last, dtype=torch.bool)
             if "chosen_ids" in inputs:                 # ftpo
-                freeze_mask.scatter_(1, ch_ids,  False)
+                freeze_mask.scatter_(1, ch_ids * ch_mask + (~ch_mask) * 0, False)
             else:                                      # single-token
                 freeze_mask.scatter_(1, chosen.unsqueeze(-1), False)
             freeze_mask.scatter_(1, rej.unsqueeze(-1), False)
@@ -384,7 +384,7 @@ class FTPOTrainer(DPOTrainer):
             if lambda_kl_target:
                 tgt_mask = torch.zeros_like(logits_last, dtype=torch.bool)
                 if "chosen_ids" in inputs:
-                    tgt_mask.scatter_(1, ch_ids, True)
+                    tgt_mask.scatter_(1, ch_ids * ch_mask + (~ch_mask) * 0, True)
                 else:
                     tgt_mask.scatter_(1, chosen.unsqueeze(-1), True)
                 tgt_mask.scatter_(1, rej.unsqueeze(-1), True)
