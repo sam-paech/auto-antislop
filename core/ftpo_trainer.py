@@ -295,11 +295,11 @@ class FTPOTrainer(DPOTrainer):
                 delta_tok   = l_chosen - l_bad                            # [B,C]
 
             if mode == "clip":
-                eps         = clip_epsilon_logits if LOSS_CALC_MODE == "logits" else clip_epsilon_probs
-                ratio_tok   = torch.exp(delta_tok)
-                clipped_tok = torch.minimum(ratio_tok,
-                                            torch.tensor(1.0 + eps, device=ratio_tok.device))
-                per_tok_loss = -torch.log( (clipped_tok + 1e-12) / (1.0 + eps) )
+                # soft hinge on raw Δ, margin = eps
+                margin  = clip_epsilon_logits if LOSS_CALC_MODE == "logits" else clip_epsilon_probs
+                tau     = 1.0        # smaller = sharper hinge
+                gap     = margin - delta_tok          # want gap ≤ 0
+                per_tok_loss = F.softplus(gap / tau)  # smooth, 0 when Δ ≥ margin
             else:  # "free"
                 per_tok_loss = -F.logsigmoid(beta * delta_tok)
 
