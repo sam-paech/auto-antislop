@@ -64,7 +64,7 @@ def load_ftpo_multi_dataset(
             ds = ds.select(idx.tolist())
 
     tokenizer.truncation_side = "left"
-    num_proc = num_proc or os.cpu_count()
+    num_proc = num_proc or int(os.cpu_count() / 4)
 
     # ── batched tokenisation & validation ───────────────────────────────
     def _tok(batch):

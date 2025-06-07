@@ -835,12 +835,22 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         # move current 4-bit graph away to free VRAM
         model.cpu(); torch.cuda.empty_cache(); gc.collect()
 
-        base_fp16 = AutoModelForCausalLM.from_pretrained(
-            config["finetune_base_model_id"],
-            torch_dtype=torch.float16,          # or bfloat16
-            device_map={"": "cpu"},             # load straight to CPU
-            trust_remote_code=True,
-        )
+        if use_unsloth:
+            # Unsloth’s loader already knows about Gemma-3 / Mistral-3 configs
+            base_fp16, _ = FastLanguageModel.from_pretrained(
+                model_name      = config["finetune_base_model_id"],
+                max_seq_length  = max_seq_length,      # same var used earlier
+                load_in_4bit    = False,               # we want full-precision
+                dtype           = torch.float16,
+                device_map      = {"": "cpu"},
+            )
+        else:
+            base_fp16 = AutoModelForCausalLM.from_pretrained(
+                config["finetune_base_model_id"],
+                torch_dtype = torch.float16,
+                device_map  = {"": "cpu"},
+                trust_remote_code = True,
+            )
         model_fp16 = PeftModel.from_pretrained(
             base_fp16,
             lora_dir,                           # plug in the saved adapter
