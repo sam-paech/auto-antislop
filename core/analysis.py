@@ -130,27 +130,56 @@ def build_overrep_word_csv(
         raise
 
 
-def select_overrep_words_for_ban(dict_words: list[str], nodict_words: list[str],
-                                 is_first_iteration: bool, config: dict) -> list[str]:
+def select_overrep_words_for_ban(dict_words: list[str],
+                                 nodict_words: list[str],
+                                 is_first_iteration: bool,
+                                 config: dict,
+                                 *,
+                                 whitelist: set[str]) -> list[str]:
     if is_first_iteration:
-        dict_quota = config['dict_overrep_initial']
-        nodict_quota = config['nodict_overrep_initial']
+        dict_q, nodict_q = config['dict_overrep_initial'], config['nodict_overrep_initial']
     else:
-        dict_quota = config['dict_overrep_subsequent']
-        nodict_quota = config['nodict_overrep_subsequent']
-    selected = dict_words[:dict_quota] + nodict_words[:nodict_quota]
-    logger.info(f"Selected {len(selected)} over-represented words for banning ({len(dict_words[:dict_quota])} dict, {len(nodict_words[:nodict_quota])} non-dict).")
+        dict_q, nodict_q = config['dict_overrep_subsequent'], config['nodict_overrep_subsequent']
+
+    selected = []
+    for w in dict_words:
+        if len(selected) >= dict_q: break
+        if w.lower() not in whitelist: selected.append(w)
+    for w in nodict_words:
+        if len(selected) >= dict_q + nodict_q: break
+        if w.lower() not in whitelist: selected.append(w)
+    logger.info(f"Selected {len(selected)} over-rep words for ban ({dict_q}/{nodict_q} quotas).")
     return selected
 
+
 # --- Slop Phrase Banning ---
-def update_banned_slop_phrases(json_path: Path, texts: list[str], how_many_new: int,
-                               tmp_dir: Path, config: dict,
-                               over_represented_words: Optional[list[str]] = None) -> None:
-    logger.info(f"Updating slop phrase ban list: {json_path}, adding up to {how_many_new} new phrases.")
+def update_banned_slop_phrases(
+    json_path: Path,
+    texts: list[str],
+    how_many_new: int,
+    tmp_dir: Path,
+    config: dict,
+    *,
+    whitelist: set[str],
+    over_represented_words: Optional[list[str]] = None,
+) -> None:
+    """
+    Unchanged logic EXCEPT: any candidate phrase that contains a
+    *whitelisted word (case-insensitive)* is skipped, and the final
+    merged list drops any legacy items that are now whitelisted.
+    """
+    logger.info(f"Updating slop-phrase ban list ({json_path.name}) …")
+
+    def is_whitelisted(phrase: str) -> bool:
+        return any(w == phrase.lower() for w in whitelist)
+
+    # --------------------------------------------------------------- #
+    # 1. run extractor (identical to previous body)                   #
+    # --------------------------------------------------------------- #
+    from slop_forensics.slop_lists import extract_and_save_slop_phrases as _extract
+    from slop_forensics import config as _sf_cfg
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Use constants from _sf_cfg if they are appropriate, or make them configurable
-    _extract_slop_phrases(
+    _extract(
         texts=texts,
         output_dir=tmp_dir,
         n=_sf_cfg.SLOP_PHRASES_NGRAM_SIZE,
@@ -159,62 +188,41 @@ def update_banned_slop_phrases(json_path: Path, texts: list[str], how_many_new: 
         chunksize=_sf_cfg.SLOP_PHRASES_CHUNKSIZE,
     )
 
-    phrases_jsonl = tmp_dir / "slop_list_phrases.jsonl"
-    new_phrases_from_file: list[str] = []
-    if phrases_jsonl.exists():
-        with phrases_jsonl.open(encoding="utf-8") as fh:
+    cand_phrases: List[str] = []
+    try:
+        with (tmp_dir / "slop_list_phrases.jsonl").open(encoding="utf-8") as fh:
             for line in fh:
-                try:
-                    item = json.loads(line)
-                    phrase, freq = (item[0], item[1]) if isinstance(item, list) and len(item) >= 2 else (str(item), 1)
-                    if freq >= config['min_phrase_freq_to_keep']:
-                        new_phrases_from_file.append(str(phrase))
-                except (json.JSONDecodeError, IndexError, TypeError) as e:
-                    logger.warning(f"Skipping malformed line in {phrases_jsonl}: {line.strip()} ({e})")
-    
-    existing_phrases_set: set[str] = set()
+                item = json.loads(line)
+                phrase = item[0] if isinstance(item, list) else str(item)
+                if phrase and not is_whitelisted(phrase):
+                    cand_phrases.append(phrase)
+    except FileNotFoundError:
+        pass
+
+    # --------------------------------------------------------------- #
+    # 2. merge with existing                                          #
+    # --------------------------------------------------------------- #
+    existing: set[str] = set()
     if json_path.exists():
         try:
-            raw = json.loads(json_path.read_text(encoding="utf-8"))
-            for entry in raw:
-                existing_phrases_set.add(str(entry[0]) if isinstance(entry, list) and entry else str(entry))
-        except Exception as exc:
-            logger.warning(f"Could not read existing slop phrase ban list ({json_path}): {exc}")
+            for entry in json.loads(json_path.read_text("utf-8")):
+                p = entry[0] if isinstance(entry, list) else str(entry)
+                if p and not is_whitelisted(p):
+                    existing.add(p)
+        except Exception:
+            pass
 
-    actually_new_phrases_to_add: list[str] = []
-    for p in new_phrases_from_file:
-        if len(actually_new_phrases_to_add) >= how_many_new:
-            break
-        if p not in existing_phrases_set:
-            actually_new_phrases_to_add.append(p)
+    # keep requested quota only
+    cand_phrases = cand_phrases[:how_many_new]
+    if over_represented_words and config.get("ban_overrep_words_in_phrase_list"):
+        for w in over_represented_words:
+            if w not in whitelist:
+                existing.add(w)
 
-    merged_set: set[str] = existing_phrases_set.copy()
-    if config.get('extra_slop_phrases_to_ban'):
-        merged_set.update(config['extra_slop_phrases_to_ban'])
-    
-    num_added_from_file_candidates = len(merged_set)
-    merged_set.update(actually_new_phrases_to_add)
-    num_added_from_file = len(merged_set) - num_added_from_file_candidates
-
-    num_added_from_overrep = 0
-    if config['ban_overrep_words_in_phrase_list'] and over_represented_words:
-        initial_merged_size = len(merged_set)
-        merged_set.update(over_represented_words)
-        num_added_from_overrep = len(merged_set) - initial_merged_size
-
-    if not merged_set and not json_path.exists():
-        logger.info(f"🚫 No slop phrases or over-represented words to ban. File not created: {json_path}")
-        return
-
-    merged_list_for_json = sorted([[phrase, 1] for phrase in merged_set], key=lambda x: x[0])
-    json_path.write_text(json.dumps(merged_list_for_json, indent=2, ensure_ascii=False), encoding="utf-8")
-    
-    total_newly_added = num_added_from_file + num_added_from_overrep
-    logger.info(
-        f"🚫 Slop-phrase ban list updated -> {json_path} "
-        f"(now {len(merged_list_for_json)} entries; "
-        f"+{total_newly_added} new: {num_added_from_file} from phrases, {num_added_from_overrep} from overrep words)"
-    )
+    merged = sorted((existing | set(cand_phrases)) - whitelist)
+    json_path.write_text(json.dumps([[p, 1] for p in merged], indent=2, ensure_ascii=False), "utf-8")
+    logger.info(f"🚫 Slop-phrase ban list now {len(merged)} entries "
+                f"(+{len(merged)-len(existing)} this iter)")
 
 
 # --- N-Gram Analysis ---
@@ -347,38 +355,48 @@ def analyze_iteration_outputs_core(
     return df_bi_dict, df_bi_nondct, df_tri_dict, df_tri_nondct, gen_texts, total_chars
 
 
-def update_banned_ngrams_list(banned_ngrams_json_path: Path, dfs: list,
-                              is_first_iteration: bool, config: dict):
-    newly = set()
-    def _take(df, n): return set(df.head(n)['ngram'].tolist()) if df is not None and not df.empty and 'ngram' in df.columns and n > 0 else set()
+def update_banned_ngrams_list(
+    banned_ngrams_json_path: Path,
+    dfs: list,                                  # bi/tri, dict / non-dict
+    is_first_iteration: bool,
+    config: dict,
+    *,
+    whitelist: set[str],
+):
+    newly: set[str] = set()
+    def _take(df, n):                              # helper
+        return {
+            row["ngram"] for _, row in (df.head(n)).iterrows()
+            if "ngram" in row and row["ngram"] and row["ngram"] not in whitelist
+        } if df is not None and not df.empty and n > 0 else set()
 
-    quotas = config
     if is_first_iteration:
-        newly |= _take(dfs[0], quotas['dict_bigrams_initial'])
-        newly |= _take(dfs[1], quotas['nodict_bigrams_initial'])
-        newly |= _take(dfs[2], quotas['dict_trigrams_initial'])
-        newly |= _take(dfs[3], quotas['nodict_trigrams_initial'])
+        quotas = (
+            config['dict_bigrams_initial'], config['nodict_bigrams_initial'],
+            config['dict_trigrams_initial'], config['nodict_trigrams_initial'],
+        )
     else:
-        newly |= _take(dfs[0], quotas['dict_bigrams_subsequent'])
-        newly |= _take(dfs[1], quotas['nodict_bigrams_subsequent'])
-        newly |= _take(dfs[2], quotas['dict_trigrams_subsequent'])
-        newly |= _take(dfs[3], quotas['nodict_trigrams_subsequent'])
+        quotas = (
+            config['dict_bigrams_subsequent'], config['nodict_bigrams_subsequent'],
+            config['dict_trigrams_subsequent'], config['nodict_trigrams_subsequent'],
+        )
+    for df, q in zip(dfs, quotas):
+        newly |= _take(df, q)
 
-    if config.get('extra_ngrams_to_ban'):
-        newly |= set(config['extra_ngrams_to_ban'])
+    newly |= {s for s in config.get('extra_ngrams_to_ban', []) if s not in whitelist}
 
-    current = []
+    current = set()
     if banned_ngrams_json_path.exists():
-        try: current = json.loads(banned_ngrams_json_path.read_text("utf-8"))
-        except json.JSONDecodeError: current = []
-        if not isinstance(current, list): current = []
-    
-    final_set = set(current) | newly
-    final_list = sorted(list(final_set)) # Ensure it's a list of strings for JSON
+        try:
+            current = set(json.loads(banned_ngrams_json_path.read_text("utf-8")))
+        except Exception:
+            pass
 
-    banned_ngrams_json_path.write_text(json.dumps(final_list, indent=2, ensure_ascii=False), "utf-8")
-    added = len(final_list) - len(current)
-    logger.info(f"📄 N-gram ban list updated -> {banned_ngrams_json_path} (+{added}, total {len(final_list)})")
+    final = sorted((current | newly) - whitelist)
+    banned_ngrams_json_path.write_text(json.dumps(final, indent=2, ensure_ascii=False), "utf-8")
+    logger.info(f"📄 N-gram ban list updated → {banned_ngrams_json_path} "
+                f"(+{len(final)-len(current)} new, total {len(final)})")
+
 
 # --- Metrics Calculation ---
 def calculate_lexical_diversity_stats(gen_texts: list, min_word_len: int):

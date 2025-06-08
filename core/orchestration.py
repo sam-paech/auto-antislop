@@ -19,6 +19,7 @@ from core.analysis import (
     calculate_repetition_score
 )
 from core.dpo import create_dpo_dataset
+from utils.whitelist import WhitelistBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +272,20 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
 
     
     if generation_enabled:
+        # ------------------------------------------------------------------ #
+        # Build project-wide whitelist                                       #
+        # ------------------------------------------------------------------ #        
+        whitelist_set = WhitelistBuilder.build(
+            model_id       = config.get("generation_chat_template_model_id") or config["vllm_model_id"],
+            system_prompt  = config.get("generation_system_prompt", ""),
+            extra_user_items = config.get("whitelist_strings", []),
+        )
+        wl_path = experiment_dir / config.get("whitelist_output_filename", "whitelist_strings.json")
+        WhitelistBuilder.write(wl_path, whitelist_set)
+        logger.info(f"✓ Whitelist compiled → {wl_path}  ({len(whitelist_set)} entries)")
+
+
+
         # --- NLTK Stopwords ---
         try:
             from nltk.corpus import stopwords # Import here to keep it local to this function
@@ -553,7 +568,7 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
                             stop_words_set=stop_words_set,
                         )
                         overrep_tokens_for_ban = select_overrep_words_for_ban(
-                            dict_words, nodict_words, (iter_idx == 0), config
+                            dict_words, nodict_words, (iter_idx == 0), config, whitelist=whitelist_set
                         )
                         _iter_log(f"overrep_tokens_for_ban = {len(overrep_tokens_for_ban)}")
                     except Exception as exc:
@@ -568,6 +583,7 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
                             dfs=[df_bi_dict, df_bi_nondct, df_tri_dict, df_tri_nondct],
                             is_first_iteration=(iter_idx == 0),
                             config=config,
+                            whitelist=whitelist_set,
                         )
                         _iter_log("n-gram ban list updated")
                     except Exception as exc:
@@ -587,6 +603,7 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
                             how_many_new=phrases_to_add_count,
                             tmp_dir=iter_analysis_dir / "phrase_tmp",
                             config=config,
+                            whitelist=whitelist_set,
                             over_represented_words=(
                                 overrep_tokens_for_ban if
                                 config['ban_overrep_words_in_phrase_list'] else None

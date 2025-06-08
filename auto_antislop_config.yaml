@@ -117,6 +117,9 @@ extra_slop_phrases_to_ban: [
   # "testament to",
   #"…", "*", " –", "–", "#",
 ]
+whitelist_strings: [
+  # "think", "thinking"
+]
 
 # --- Regex Banning (within auto-antislop, passed to antislop-vllm) ---
 # User-supplied regex patterns to ban
