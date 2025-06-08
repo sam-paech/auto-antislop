@@ -17,7 +17,8 @@ from slop_forensics.analysis import (
     filter_stopwords, filter_common_words, analyze_word_rarity,
     find_over_represented_words
 )
-from utils.text_normalise import normalise_keep_marks, extract_words
+from slop_forensics.utils import normalize_text as normalise_keep_marks
+from slop_forensics.utils import extract_words
 # from slop_forensics.utils import load_jsonl_file, normalize_text, extract_words # Using local versions for now
 
 logger = logging.getLogger(__name__)

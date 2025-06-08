@@ -19,10 +19,8 @@ from pathlib import Path
 from typing import Iterable, Set
 
 from transformers import AutoTokenizer
-from utils.text_normalise import (
-    normalise_keep_marks,
-    extract_words,
-)
+from slop_forensics.utils import normalize_text as normalise_keep_marks
+from slop_forensics.utils import extract_words
 
 # ------------------------------------------------------------------------------
 # Helper class
