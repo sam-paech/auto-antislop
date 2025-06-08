@@ -112,17 +112,35 @@ ban_overrep_words_in_phrase_list: true # Add selected over-rep words to slop phr
 min_phrase_freq_to_keep: 2 # Min frequency for a new phrase from slop-forensics to be considered
 top_n_initial_slop_ban: 600 # New slop phrases from slop-forensics to ban in iter 0
 top_n_subsequent_slop_ban: 100 # New slop phrases from slop-forensics to ban in later iters
-# User-supplied extra slop phrases to always ban (processed by auto-antislop)
+
+# User supplied list of strings to alwyas ban
+# - case insensitive
+# To trigger a ban, the sequence must not have a word-like character
+#    (not punctuation or whitespace) directly on either side. That is to say, we
+#    are not banning disallowed sequences that occur as substrings in longer
+#    words. The exception is if the banned string is already bookended by
+#    a non-word character.
+#
+#    Examples: 
+#    banned string "cat"
+#      - won't trigger a ban for "cation"
+#     - will trigger a ban on "cat[morecat]"
+#   banned string "cat["
+#     - *will* trigger a ban on "cat[morecat]", because the banned string
+#        ends with a non-word character.
 extra_slop_phrases_to_ban: [
   # "testament to",
   #"…", "*", " –", "–", "#",
 ]
+
+# these will be excluded from the list of slop strings that the pipeline finds
 whitelist_strings: [
   # "think", "thinking"
 ]
 
 # --- Regex Banning (within auto-antislop, passed to antislop-vllm) ---
 # User-supplied regex patterns to ban
+# Note: unoptimised regex patterns can slow down antislop generation, as they will be called often on large texts.
 extra_regex_patterns: [
     # These ones ban "it's not x, it's y" type patterns:
     #"\\bnot\\s+(?:just|only|merely)?\\s*(?:(?!but\\b|[.?!]).){1,50}?[,;:—–-]?\\s*but\\s+(?:also\\s+)?",
