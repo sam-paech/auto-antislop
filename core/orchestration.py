@@ -277,7 +277,6 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
         # ------------------------------------------------------------------ #        
         whitelist_set = WhitelistBuilder.build(
             model_id       = config.get("generation_chat_template_model_id") or config["vllm_model_id"],
-            system_prompt  = config.get("generation_system_prompt", ""),
             extra_user_items = config.get("whitelist_strings", []),
         )
         wl_path = experiment_dir / config.get("whitelist_output_filename", "whitelist_strings.json")
