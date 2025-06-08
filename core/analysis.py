@@ -11,7 +11,6 @@ from typing import List, Tuple, Dict, Optional
 import unicodedata
 
 # Assuming slop-forensics is in sys.path via main.py
-from slop_forensics.slop_lists import extract_and_save_slop_phrases as _extract_slop_phrases
 from slop_forensics import config as _sf_cfg # For SLOP_PHRASES_NGRAM_SIZE etc.
 from slop_forensics.analysis import (
     get_word_counts, filter_mostly_numeric, merge_plural_possessive_s,
