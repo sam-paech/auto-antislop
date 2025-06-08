@@ -8,6 +8,7 @@ import pandas as pd
 import nltk
 import numpy as np
 from typing import List, Tuple, Dict, Optional
+import unicodedata
 
 # Assuming slop-forensics is in sys.path via main.py
 from slop_forensics.slop_lists import extract_and_save_slop_phrases as _extract_slop_phrases
@@ -43,6 +44,16 @@ def local_extract_words(normalized_text: str, min_len: int):
         if len(w) >= min_len or "'" in w
     ]
 
+def _token_is_letter_or_mark(token: str) -> bool:
+    """
+    True if every code-point in *token* is either a Unicode Letter (L*)
+    or Mark (M*).  Apostrophes / hyphens are not allowed here because
+    `normalise_keep_marks` has already removed them.
+    """
+    for ch in token:
+        if unicodedata.category(ch)[0] not in ("L", "M"):
+            return False
+    return True
 
 # --- Over-Represented Word Analysis ---
 BOOST_EXPONENT = 0.75
@@ -236,7 +247,11 @@ def _convert_and_normalize_human_ngram_list(ngram_list_of_dicts, n_value: int):
         try: freq_int = int(frequency)
         except ValueError: continue
         
-        tokens = [t.lower() for t in nltk.word_tokenize(local_normalize_text(str(ngram_str))) if t.isalpha()]
+        tokens = [
+            t.lower()
+            for t in nltk.word_tokenize(local_normalize_text(str(ngram_str)))
+            if _token_is_letter_or_mark(t)
+        ]
         if len(tokens) == n_value:
             processed_ngram_key = " ".join(tokens)
             if processed_ngram_key:
@@ -324,8 +339,16 @@ def analyze_iteration_outputs_core(
     min_word_len = config['min_word_len_for_analysis']
 
     for txt in gen_texts:
-        tokens = [t.lower() for t in nltk.word_tokenize(local_normalize_text(txt)) if t.isalpha()]
-        tokens_filtered = [tok for tok in tokens if tok not in stop_words_set and (len(tok) >= min_word_len or tok in {"it's", "i'm"})]
+        tokens_raw = nltk.word_tokenize(local_normalize_text(txt))
+        tokens = [
+            t.lower()
+            for t in tokens_raw
+            if _token_is_letter_or_mark(t)
+        ]
+        tokens_filtered = [
+            tok for tok in tokens
+            if tok not in stop_words_set and (len(tok) >= min_word_len or tok in {"it's", "i'm"})
+        ]
         bigram_counter.update(" ".join(bg) for bg in nltk.ngrams(tokens_filtered, 2) if all(bg))
         trigram_counter.update(" ".join(tg) for tg in nltk.ngrams(tokens_filtered, 3) if all(tg))
 
@@ -426,7 +449,11 @@ def calculate_repetition_score(gen_texts: list, total_chars: int, iteration_dfs:
 
     total_repetition_instances = 0
     for text in gen_texts:
-        tokens_all = [t.lower() for t in nltk.word_tokenize(local_normalize_text(text)) if t.isalpha()]
+        tokens_all = [
+            t.lower()
+            for t in nltk.word_tokenize(local_normalize_text(text))
+            if _token_is_letter_or_mark(t)
+        ]
         tokens = [tok for tok in tokens_all if tok not in stop_words_set and (len(tok) >= min_word_len or tok in {"it's", "i'm"})]
         
         current_bigrams = [" ".join(bg) for bg in nltk.ngrams(tokens, 2) if all(bg)]
