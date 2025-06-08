@@ -1,38 +1,45 @@
 # utils/text_normalise.py
 """
-Unicode-aware normalisation helpers shared by analysis *and* whitelist
-construction.  They keep every Letter (Lu, Ll, Lt, Lm, Lo) **and**
-every Mark (Mn, Mc, Me) while replacing everything else with a space.
+Normalisation helpers used by both analysis and whitelist construction.
+
+• `normalise_keep_marks`  – lower-cases text, keeps Unicode Letters
+  (Lu, Ll, Lt, Lm, Lo) and Marks (Mn, Mc, Me); every other code-point
+  becomes a space.  Apostrophes / hyphens are *not* preserved.
+• `extract_words`  – splits the normalised text on spaces to yield
+  individual tokens.
 """
 from __future__ import annotations
-import unicodedata, re
+import unicodedata
+import re
+from typing import List
 
 __all__ = ["normalise_keep_marks", "extract_words"]
 
-_SPACES_RE = re.compile(r"\s+")
+_SPACE_RE = re.compile(r"\s+")
 
 
 def normalise_keep_marks(text: str) -> str:
-    buf: list[str] = []
+    """
+    Lower-case *text* and replace every non-letter / non-mark character
+    with a single space, then collapse runs of whitespace.
+
+    Returns the cleaned string (may be empty).
+    """
+    buffer: list[str] = []
     for ch in text:
-        cat0 = unicodedata.category(ch)[0]  # first letter of “Lu”, “Mn”, …
-        if cat0 in ("L", "M") or ch in ("'", "-"):
-            buf.append(ch.lower())
+        cat0 = unicodedata.category(ch)[0]          # first letter of category
+        if cat0 in ("L", "M"):
+            buffer.append(ch.lower())
         else:
-            buf.append(" ")
-    return _SPACES_RE.sub(" ", "".join(buf)).strip()
+            buffer.append(" ")
+    return _SPACE_RE.sub(" ", "".join(buffer)).strip()
 
 
-_WORD_RE = re.compile(r"[A-Za-z\p{Mn}\p{Mc}\p{Me}']+", re.UNICODE)
-
-
-def extract_words(text: str) -> list[str]:
+def extract_words(normalised_text: str) -> List[str]:
     """
-    Return lower-cased tokens consisting of letters + marks + apostrophes.
+    Split a string already processed by `normalise_keep_marks`
+    into tokens.  Empty tokens are discarded.
     """
-    # Python `re` cannot use \p{Mn} natively <3.12; the pattern above works
-    # in 3.12+.  For 3.11 fallback to simple split.
-    try:
-        return [m.group(0) for m in _WORD_RE.finditer(text)]
-    except re.error:      # <3.12
-        return text.split()
+    if not normalised_text:
+        return []
+    return [token for token in normalised_text.split(" ") if token]
