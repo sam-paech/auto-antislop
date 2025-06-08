@@ -17,6 +17,7 @@ from slop_forensics.analysis import (
     filter_stopwords, filter_common_words, analyze_word_rarity,
     find_over_represented_words
 )
+from utils.text_normalise import normalise_keep_marks, extract_words
 # from slop_forensics.utils import load_jsonl_file, normalize_text, extract_words # Using local versions for now
 
 logger = logging.getLogger(__name__)
@@ -34,14 +35,13 @@ def local_load_jsonl_file(file_path_str: str):
     return data
 
 def local_normalize_text(text: str) -> str:
-    text = text.lower()
-    text = re.sub(r"<[^>]+>", " ", text)  # Remove HTML tags
-    text = re.sub(r"[\W_]+", " ", text)    # Replace non-alphanumeric with space
-    text = re.sub(r"\s+", " ", text).strip() # Normalize whitespace
-    return text
+    return normalise_keep_marks(text)
 
 def local_extract_words(normalized_text: str, min_len: int):
-    return [word for word in normalized_text.split() if len(word) >= min_len or "'" in word]
+    return [
+        w for w in extract_words(normalized_text)
+        if len(w) >= min_len or "'" in w
+    ]
 
 
 # --- Over-Represented Word Analysis ---

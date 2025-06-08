@@ -1,32 +1,51 @@
 # utils/whitelist.py
 """
-Build and persist the global whitelist of strings that must never be
-added to any ban-list.
+Constructs a global whitelist of strings that must never be placed in
+any ban list.
 
 Sources
 -------
-1. Every special-token string exposed by the tokenizer.
-2. Every word that occurs *after* the assistant placeholder in a
-   one-turn chat-template instance (user → assistant).
-3. Arbitrary user-supplied extras from YAML / CLI.
+1. All special-token texts exposed by the model’s tokenizer.
+2. Every phrase (entire line) – and every word inside those phrases –
+   that appears *after* the assistant-message placeholder in a single
+   user→assistant chat-template example.
+3. Optional user-supplied strings from the YAML / CLI configuration.
 """
+
 from __future__ import annotations
-import json, re, threading
+import json
+import threading
 from pathlib import Path
 from typing import Iterable, Set
 
 from transformers import AutoTokenizer
+from utils.text_normalise import (
+    normalise_keep_marks,
+    extract_words,
+)
 
-_WORD_RE = re.compile(r"[A-Za-z']+")
-
+# ------------------------------------------------------------------------------
+# Helper class
+# ------------------------------------------------------------------------------
 
 class WhitelistBuilder:
-    _tok_cache: dict[str, "AutoTokenizer"] = {}
-    _lock = threading.Lock()
+    """
+    Static helper for creating and persisting the whitelist.
+
+    All strings are:
+
+    * converted to lowercase
+    * normalised via `normalise_keep_marks`
+    * deduplicated
+    """
+
+    _tokenizer_cache: dict[str, "AutoTokenizer"] = {}
+    _cache_lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
-    # public API                                                         #
+    # Public API                                                         #
     # ------------------------------------------------------------------ #
+
     @classmethod
     def build(
         cls,
@@ -38,75 +57,109 @@ class WhitelistBuilder:
         Parameters
         ----------
         model_id
-            HuggingFace model id or local checkpoint directory.
+            Hugging Face model ID or local checkpoint directory.
         extra_user_items
-            Free-form strings that the user always wants whitelisted.
+            Arbitrary strings provided by the user that must also be whitelisted.
 
         Returns
         -------
-        set[str]  – lower-cased, deduplicated whitelist entries.
+        Set[str]
+            Normalised whitelist entries (lower-cased, no duplicates, no blanks).
         """
-        tok = cls._tokenizer(model_id)
+        tokenizer = cls._get_tokenizer(model_id)
+        whitelist: set[str] = set()
 
-        # 1) special tokens ----------------------------------------------
-        wl: set[str] = {
-            t for t in [
-                tok.bos_token, tok.eos_token, tok.unk_token,
-                tok.pad_token, tok.cls_token, tok.sep_token,
-                *(tok.additional_special_tokens or []),
-            ] if t
-        }
+        # 1. Special token texts -----------------------------------------
+        special_token_texts = [
+            tokenizer.bos_token,
+            tokenizer.eos_token,
+            tokenizer.unk_token,
+            tokenizer.pad_token,
+            tokenizer.cls_token,
+            tokenizer.sep_token,
+            *(tokenizer.additional_special_tokens or []),
+        ]
+        for raw_text in special_token_texts:
+            if not raw_text:
+                continue
+            cls._add_phrase_and_words(whitelist, raw_text)
 
-        # 2) chat-template tail (everything after assistant placeholder) --
-        tail = cls._template_tail(tok)           # one string
-        wl.update(w.lower() for w in _WORD_RE.findall(tail))
+        # 2. Tail of the chat template -----------------------------------
+        template_tail_text = cls._get_chat_template_tail(tokenizer)
+        for line in template_tail_text.splitlines():
+            cls._add_phrase_and_words(whitelist, line)
 
-        # 3) user extras --------------------------------------------------
+        # 3. User-supplied extras ----------------------------------------
         if extra_user_items:
-            wl.update(str(x).lower() for x in extra_user_items)
+            for item in extra_user_items:
+                cls._add_phrase_and_words(whitelist, str(item))
 
-        # final clean-up
-        return {w.strip() for w in wl if w.strip()}
+        # Final clean-up: remove any empty strings that might have slipped in
+        whitelist.discard("")
+        return whitelist
 
     @classmethod
-    def write(cls, path: Path, whitelist: Iterable[str]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+    def write(cls, file_path: Path, whitelist: Iterable[str]) -> None:
+        """Write the whitelist to *file_path* as pretty-printed JSON."""
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(
             json.dumps(sorted(whitelist), indent=2, ensure_ascii=False),
-            "utf-8",
+            encoding="utf-8",
         )
 
     # ------------------------------------------------------------------ #
-    # internals                                                          #
+    # Internal helpers                                                   #
     # ------------------------------------------------------------------ #
+
     @classmethod
-    def _tokenizer(cls, model_id: str):
-        with cls._lock:
-            tok = cls._tok_cache.get(model_id)
-            if tok is None:
-                tok = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-                cls._tok_cache[model_id] = tok
-            return tok
+    def _get_tokenizer(cls, model_id: str):
+        """Thread-safe one-time load of the tokenizer."""
+        with cls._cache_lock:
+            tokenizer = cls._tokenizer_cache.get(model_id)
+            if tokenizer is None:
+                tokenizer = AutoTokenizer.from_pretrained(
+                    model_id, trust_remote_code=True
+                )
+                cls._tokenizer_cache[model_id] = tokenizer
+            return tokenizer
 
     @staticmethod
-    def _template_tail(tok) -> str:
-        """Return the textual scaffold *after* the assistant placeholder."""
-        PH_USER = "__USER_MSG__"
-        PH_AST  = "__ASSISTANT_MSG__"
+    def _add_phrase_and_words(target_set: set[str], raw_text: str) -> None:
+        """
+        Normalise *raw_text*, add the whole phrase, then add each individual
+        word extracted from the phrase.
+        """
+        normalised = normalise_keep_marks(raw_text)
+        if not normalised:
+            return
+        target_set.add(normalised)
+        target_set.update(extract_words(normalised))
 
-        msgs = [
-            {"role": "user",      "content": PH_USER},
-            {"role": "assistant", "content": PH_AST},
+    @staticmethod
+    def _get_chat_template_tail(tokenizer) -> str:
+        """
+        Build one user→assistant chat-template instance and return only the
+        text *after* the assistant placeholder.  That is the scaffold the
+        model tends to emit, so its words must be whitelisted.
+        """
+        placeholder_user = "__USER__"
+        placeholder_assistant = "__ASSISTANT__"
+
+        messages = [
+            {"role": "user",      "content": placeholder_user},
+            {"role": "assistant", "content": placeholder_assistant},
         ]
-        full = tok.apply_chat_template(
-            msgs,
+
+        full_template: str = tokenizer.apply_chat_template(
+            messages,
             tokenize=False,
             add_generation_prompt=False,
         )
 
-        i_ast = full.find(PH_AST)
-        if i_ast == -1:
-            raise ValueError("assistant placeholder not found in chat template")
+        assistant_pos = full_template.find(placeholder_assistant)
+        if assistant_pos == -1:
+            # Fallback: return the whole template if the placeholder wasn't found
+            return full_template.strip()
 
-        # slice strictly *after* the placeholder and strip whitespace
-        return full[i_ast + len(PH_AST):].strip()
+        tail = full_template[assistant_pos + len(placeholder_assistant):].strip()
+        return tail
