@@ -74,7 +74,6 @@ _NGRAM: Sequence[str] = (
 )
 
 _SLOP: Sequence[str] = (
-    "ban_overrep_words_in_phrase_list",
     "min_phrase_freq_to_keep",
     "top_n_initial_slop_ban",
     "top_n_subsequent_slop_ban",

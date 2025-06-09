@@ -604,8 +604,7 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
                             config=config,
                             whitelist=whitelist_set,
                             over_represented_words=(
-                                overrep_tokens_for_ban if
-                                config['ban_overrep_words_in_phrase_list'] else None
+                                overrep_tokens_for_ban
                             ),
                         )
                         _iter_log("slop-phrase ban list updated  "
