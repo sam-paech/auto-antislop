@@ -562,8 +562,9 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     #torch.cuda.reset_peak_memory_stats()
 
 
-
-    #freeze_early_layers(model, n_unfrozen = 16, verbose = True)
+    if config.get("finetune_freeze_early_layers", False):
+        n_unfrozen = config.get("finetune_n_layers_unfrozen", 10)
+        freeze_early_layers(model, n_unfrozen = n_unfrozen, verbose = True)
 
 
     # --- DPO Trainer Setup ---

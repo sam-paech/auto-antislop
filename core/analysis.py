@@ -225,7 +225,7 @@ def update_banned_slop_phrases(
 
     # keep requested quota only
     cand_phrases = cand_phrases[:how_many_new]
-    if over_represented_words and config.get("ban_overrep_words_in_phrase_list"):
+    if over_represented_words:
         for w in over_represented_words:
             if w not in whitelist:
                 existing.add(w)
@@ -352,7 +352,7 @@ def analyze_iteration_outputs_core(
         bigram_counter.update(" ".join(bg) for bg in nltk.ngrams(tokens_filtered, 2) if all(bg))
         trigram_counter.update(" ".join(tg) for tg in nltk.ngrams(tokens_filtered, 3) if all(tg))
 
-    freq_norm_denom = config['freq_norm_denom_for_analysis']
+    freq_norm_denom = config.get('freq_norm_denom_for_analysis', 100000)
     gen_bigrams_norm = build_norm_dict(bigram_counter, float(total_chars), config['top_k_bigrams'], freq_norm_denom)
     gen_trigrams_norm = build_norm_dict(trigram_counter, float(total_chars), config['top_k_trigrams'], freq_norm_denom)
 
@@ -438,9 +438,9 @@ def calculate_repetition_score(gen_texts: list, total_chars: int, iteration_dfs:
     if not gen_texts or total_chars == 0: return 0.0
     
     target_ngrams = set()
-    top_n_rep = config['top_n_repetition_stat']
+    top_n_rep = config.get('top_n_repetition_stat', 50)
     min_word_len = config['min_word_len_for_analysis']
-    freq_norm_denom = config['freq_norm_denom_for_analysis']
+    freq_norm_denom = config.get('freq_norm_denom_for_analysis', 100000)
 
     for df in iteration_dfs: # df_bi_dict, df_bi_nondct, df_tri_dict, df_tri_nondct
         if df is not None and not df.empty and 'ngram' in df.columns:

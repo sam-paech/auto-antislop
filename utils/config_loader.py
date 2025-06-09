@@ -17,8 +17,6 @@ _ALWAYS: Sequence[str] = (
     "human_profile_path",
     "num_iterations",
     "min_word_len_for_analysis",
-    "freq_norm_denom_for_analysis",
-    "top_n_repetition_stat",
     "log_level"
 )
 
