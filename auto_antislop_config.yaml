@@ -26,6 +26,8 @@ vllm_max_model_len: 2500
 vllm_dtype: "bfloat16"
 # Additional raw CLI arguments for vLLM server, e.g., ["--tensor-parallel-size", "4"] for multiple gpus
 vllm_extra_args: [] # each param as a separate string, e.g. ["--quantization", "bitsandbytes"]
+vllm_env:                  # env vars for the vLLM process
+  # VLLM_USE_V1: "1"  # may be needed for amd gpus
 
 
 ################################################################################

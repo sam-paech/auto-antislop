@@ -44,6 +44,7 @@ def start_vllm_server(
     max_model_len: int,
     dtype: str,
     vllm_extra_args: Optional[List[str]] = None,
+    extra_env: Optional[dict[str, str]] = None,
     wait_timeout: int = 720,
     uvicorn_log_level: str = "error",
     quiet_stdout: bool = True,
@@ -71,6 +72,10 @@ def start_vllm_server(
 
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices
+    if extra_env:
+        # stringify to avoid type issues
+        env.update({k: str(v) for k, v in extra_env.items()})
+        logger.debug(f"vLLM extra env → {extra_env}")
 
     logger.info("Starting vLLM server...")
     logger.info(f"Command: {' '.join(cmd)}")

@@ -29,6 +29,7 @@ _VLLM: Sequence[str] = (
     "vllm_max_model_len",
     "vllm_dtype",
     "vllm_extra_args",
+    "vllm_env", 
 )
 
 _GENERATION: Sequence[str] = (
