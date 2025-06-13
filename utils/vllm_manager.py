@@ -86,6 +86,7 @@ def start_vllm_server(
 
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices
+    env["HIP_VISIBLE_DEVICES"] = cuda_visible_devices
     if extra_env:
         # stringify to avoid type issues
         env.update({k: str(v) for k, v in extra_env.items()})
