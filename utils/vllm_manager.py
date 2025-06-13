@@ -4,11 +4,24 @@ import subprocess
 import time
 import requests
 import logging
-from pathlib import Path
+from pathlib import Path, PurePath
+import tempfile, textwrap
 from typing import Optional, List
 
 logger = logging.getLogger(__name__)
 
+def _show_tail(log_path: Path, *, n_lines: int = 40) -> None:
+    """Dump the last *n_lines* of *log_path* to the logger."""
+    try:
+        if log_path.is_file():
+            tail = log_path.read_text(encoding="utf-8").splitlines()[-n_lines:]
+            logger.error(
+                "──── vLLM stdout/stderr (last %d lines) ────\n%s\n────────────────────────────────────────",
+                n_lines, "\n".join(tail),
+            )
+    except Exception as exc:                           # pragma: no cover
+        logger.error("Could not read vLLM log: %s", exc)
+        
 def is_vllm_server_alive(port: int, api_base_path: str = "/v1") -> bool:
     """Checks if the vLLM server is responsive."""
     health_url = f"http://127.0.0.1:{port}/health" # Standard vLLM health endpoint
@@ -48,6 +61,7 @@ def start_vllm_server(
     wait_timeout: int = 720,
     uvicorn_log_level: str = "error",
     quiet_stdout: bool = True,
+    log_to_file: bool | Path = True,
 ) -> Optional[subprocess.Popen]:
     """Starts the vLLM API server."""
     if is_vllm_server_alive(port):
@@ -80,21 +94,40 @@ def start_vllm_server(
     logger.info("Starting vLLM server...")
     logger.info(f"Command: {' '.join(cmd)}")
     
+    # ------------- stdout / stderr routing -----------------
+    if quiet_stdout:
+        if log_to_file is True:
+            tmp = Path(tempfile.gettempdir()) / f"vllm_{port}_{int(time.time())}.log"
+        elif log_to_file:
+            tmp = Path(PurePath(log_to_file)).expanduser().resolve()
+            tmp.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            tmp = None                                        # swallow completely
+
+        stdout_target = tmp.open("w") if tmp else subprocess.DEVNULL
+        stderr_target = stdout_target if tmp else subprocess.DEVNULL
+        if tmp:
+            logger.info("vLLM stdout/stderr → %s", tmp)
+    else:
+        stdout_target = None          # inherit terminal
+        stderr_target = None
+    # --------------------------------------------------------
+
     try:
-        # Start process without piping stdout/stderr to Popen directly for cleaner notebook/CLI output
-        # The vLLM server logs to console by default.
         server_proc = subprocess.Popen(
             cmd,
             env=env,
-            stdout=subprocess.DEVNULL if quiet_stdout else None,
-            stderr=subprocess.STDOUT if quiet_stdout else None,
+            stdout=stdout_target,
+            stderr=stderr_target,
+            text=True,
         )
     except FileNotFoundError:
-        logger.error("vLLM not found. Please ensure vLLM is installed and in your PATH (e.g., `pip install vllm`).")
+        logger.error("vLLM not found. Is it installed (pip install vllm)?")
         return None
     except Exception as e:
-        logger.error(f"Failed to start vLLM server process: {e}")
+        logger.error("Failed to start vLLM: %s", e)
         return None
+
 
 
     logger.info(f"Waiting for vLLM server to become ready on port {port} (timeout: {wait_timeout}s)...")
@@ -102,6 +135,8 @@ def start_vllm_server(
     while time.time() - start_time < wait_timeout:
         if server_proc.poll() is not None: # Process terminated
             logger.error(f"vLLM server process terminated prematurely with code {server_proc.returncode}.")
+            if quiet_stdout and tmp:
+                _show_tail(tmp)
             # Try to get some output if possible (might not work well without pipes)
             # stdout, stderr = server_proc.communicate()
             # if stdout: logger.error(f"vLLM stdout: {stdout.decode(errors='ignore')}")
