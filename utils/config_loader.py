@@ -17,7 +17,8 @@ _ALWAYS: Sequence[str] = (
     "human_profile_path",
     "num_iterations",
     "min_word_len_for_analysis",
-    "log_level"
+    "log_level",
+    "model_id",
 )
 
 _VLLM: Sequence[str] = (
@@ -181,6 +182,16 @@ def merge_config_with_cli_args(config: Dict[str, Any], cli_args: argparse.Namesp
     )
     all_config_keys: List[str] = [k for group in _all_groups for k in group]
 
+     # 4. fallback for per-stage model IDs  <-- add this block
+    for key in (
+        "vllm_model_id",
+        "generation_model_id",
+        "generation_chat_template_model_id",
+        "finetune_base_model_id",
+    ):
+        if not merged.get(key):                 # None, "", or missing
+            merged[key] = merged.get("model_id")
+
     # Overwrite config if user specified a value
     for key in all_config_keys:
         cli_val = getattr(cli_args, key, None)
@@ -194,7 +205,7 @@ def merge_config_with_cli_args(config: Dict[str, Any], cli_args: argparse.Namesp
 # ---------------------------------------------------------------------------
 
 def _missing(cfg: Dict[str, Any], keys: Sequence[str]) -> List[str]:
-    return [k for k in keys if k not in cfg]
+    return [k for k in keys if k not in cfg or cfg[k] is None]
 
 def validate_config(cfg: Dict[str, Any]) -> None:
     """Raise ValueError if any required config is missing based on pipeline flags."""
