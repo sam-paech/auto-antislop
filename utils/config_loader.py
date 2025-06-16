@@ -114,9 +114,11 @@ _FINETUNE: Sequence[str] = (
     "finetune_output_dir_suffix",
     "finetune_save_merged_16bit",
     "finetune_save_gguf_q8_0",
-    "finetune_max_train_examples",
-    "finetune_ftpo_sample_regularisation_strength",
+    "finetune_max_train_examples",    
     "finetune_cuda_visible_devices",
+    "ftpo_sample_rejected_regularisation_strength",
+    "ftpo_sample_chosen_regularisation_strength",
+    "ftpo_sample_min_chosen_tokens",
 )
 
 

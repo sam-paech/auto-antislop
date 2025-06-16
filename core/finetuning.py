@@ -294,17 +294,26 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 return
             dataset_path = ftpo_files[-1]
 
+        # ------------------------------------------------------------------
+        # FTPO dataset with dual regularisation + built-in size cap
+        # ------------------------------------------------------------------
         dpo_dataset_hf = load_ftpo_multi_dataset(
-            dataset_path, tokenizer,
-            max_seq_len=max_seq_length,
-            rule_reg_strength    = config.get("finetune_ftpo_sample_regularisation_strength", 0.0),
+            dataset_path,
+            tokenizer,
+            max_seq_len         = max_seq_length,
+            # balance *rejected* tokens
+            rejected_reg_strength = config.get("ftpo_sample_rejected_regularisation_strength", 0.8),
+            # balance *chosen* tokens
+            chosen_reg_strength   = config.get("ftpo_sample_chosen_regularisation_strength", 0.8),
+            # hard floor on |chosen|
+            min_chosen_tokens     = config.get("ftpo_sample_min_chosen_tokens", 3),
+            # overall training-set cap (used for per-token quotas too)
+            max_train_examples    = config.get("finetune_max_train_examples"),
         )
-        
+
+        # loader already returns a shuffled dataset; an extra shuffle is fine but optional
         dpo_dataset_hf = dpo_dataset_hf.shuffle(seed=config.get("finetune_shuffle_seed", 3407))
-        max_train = config.get("finetune_max_train_examples")
-        if isinstance(max_train, int) and max_train > 0 and len(dpo_dataset_hf) > max_train:
-            dpo_dataset_hf = dpo_dataset_hf.select(range(max_train))
-            logger.info(f"Capped training dataset to {max_train} examples.")
+
 
         
         # ──────────────────────────────────────────────────────────────
@@ -312,16 +321,17 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         #         –– prints up to 50 ftpo examples for a quick sanity check.
         #         –– gated by new config flag `finetune_debug_ftpo_tokens`.
         # ──────────────────────────────────────────────────────────────
-        sample_n = min(50, len(dpo_dataset_hf))
-        print(f"\n🔎 ftpo debug: showing {sample_n} examples "
-            "(last-5 prompt tokens, chosen ▸ rejected)\n")
-        for i, ex in enumerate(dpo_dataset_hf.select(range(sample_n))):
-            tail_prompt = tokenizer.convert_ids_to_tokens(ex["prompt_ids"][-5:])
-            chosen_tok  = tokenizer.convert_ids_to_tokens([ex["chosen_ids"][0]])[0]
-            rejected_tok = tokenizer.convert_ids_to_tokens([ex["rejected_token_id"]])[0]
-            tail_str = " ".join(tail_prompt)
-            print(f"{i:03d}: … {tail_str}  →  {chosen_tok} ▸ {rejected_tok}")
-        print("\n—— end ftpo debug ——\n")
+        if False:
+            sample_n = min(50, len(dpo_dataset_hf))
+            print(f"\n🔎 ftpo debug: showing {sample_n} examples "
+                "(last-5 prompt tokens, chosen ▸ rejected)\n")
+            for i, ex in enumerate(dpo_dataset_hf.select(range(sample_n))):
+                tail_prompt = tokenizer.convert_ids_to_tokens(ex["prompt_ids"][-5:])
+                chosen_tok  = tokenizer.convert_ids_to_tokens([ex["chosen_ids"][0]])[0]
+                rejected_tok = tokenizer.convert_ids_to_tokens([ex["rejected_token_id"]])[0]
+                tail_str = " ".join(tail_prompt)
+                print(f"{i:03d}: … {tail_str}  →  {chosen_tok} ▸ {rejected_tok}")
+            print("\n—— end ftpo debug ——\n")
 
     else:
         logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'ftpo'.")
