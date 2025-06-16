@@ -32,6 +32,9 @@ def load_ftpo_multi_dataset(
     Logs the counts of `_WATCH` tokens at every major stage.
     """
 
+    if min_chosen_tokens < 1:
+        min_chosen_tokens = 1
+
     # ------------------------------------------------------------------
     # helpers
     # ------------------------------------------------------------------
@@ -88,14 +91,48 @@ def load_ftpo_multi_dataset(
     # ------------------------------------------------------------------
     # 2️⃣  chosen-token down-sampling
     # ------------------------------------------------------------------
+    rej_pre_chosen = Counter(r["rejected_decoded"] for r in rows)
+    _log_top(rej_pre_chosen, "PRE-CHOSEN")
+
     if chosen_reg_strength > 0:
-        chosen_cts = Counter(tok for r in rows for tok in (r["multi_chosen_decoded"] or []))
-        chosen_w   = _median_threshold(chosen_cts, chosen_reg_strength)
+        # 1) tally current chosen-token counts
+        chosen_cts = Counter(tok
+                            for r in rows
+                            for tok in (r["multi_chosen_decoded"] or []))
+
+        # 2) convert median-threshold weights → integer *target counts*
+        w_chosen   = _median_threshold(chosen_cts, chosen_reg_strength)
+        tgt_chosen = {tok: int(round(cnt * w_chosen.get(tok, 1.0)))
+                    for tok, cnt in chosen_cts.items()}
+
+        # 3) build an index of every occurrence (row-idx, pos-in-list)
+        from collections import defaultdict
+        occ_idx = defaultdict(list)          # tok → [(row_i, pos)]
+        for i, r in enumerate(rows):
+            for p, tok in enumerate(r["multi_chosen_decoded"] or []):
+                occ_idx[tok].append((i, p))
+
+        # 4) for tokens that exceed their quota, randomly blank out surplus
+        for tok, occ in occ_idx.items():
+            surplus = len(occ) - tgt_chosen.get(tok, len(occ))
+            if surplus <= 0:
+                continue
+            rng.shuffle(occ)
+            for row_i, pos in occ[:surplus]:
+                rows[row_i]["multi_chosen_decoded"][pos] = None     # mark
+
+        # 5) remove all marked (=None) tokens from every row
         for r in rows:
             r["multi_chosen_decoded"] = [
-                tok for tok in (r["multi_chosen_decoded"] or [])
-                if rng.random() < chosen_w.get(tok, 1.0)
+                tok for tok in r["multi_chosen_decoded"] if tok is not None
             ]
+
+    # ------------------------------------------------------------------
+    #  Debug: rejected-token distribution **after** chosen regularisation
+    # ------------------------------------------------------------------
+    rej_post_chosen = Counter(r["rejected_decoded"] for r in rows)
+    _log_top(rej_post_chosen, "POST-CHOSEN")
+
 
     # ------------------------------------------------------------------
     # 3️⃣  min-chosen filter
