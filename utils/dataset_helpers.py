@@ -79,91 +79,85 @@ def load_ftpo_multi_dataset(
     rej_counts = Counter(r["rejected_decoded"] for r in rows)
     _log_top(rej_counts, "BEFORE")
 
-    # ------------------------------------------------------------------
-    # 1️⃣  per-token quotas for rejected (no data mutation)
-    # ------------------------------------------------------------------
-    quotas = _median_threshold(rej_counts, rejected_reg_strength)
-    S      = max_train_examples or len(rows)
-    total  = sum(quotas.get(t, 1.0) * c for t, c in rej_counts.items())
-    target = {t: int(round(S * quotas.get(t, 1.0) * c / total))
-              for t, c in rej_counts.items()}
+    # ────────────────────────────────────────────────────────────────
+    # 1️⃣  Capture ORIGINAL rejected-token distribution & ratios
+    #     (no rows removed, no chosen trimming yet)
+    # ────────────────────────────────────────────────────────────────
+    rej_cts_orig = Counter(r["rejected_decoded"] for r in rows)
+    _log_top(rej_cts_orig, "PRE-NORMALISATION")
 
-    # ------------------------------------------------------------------
-    # 2️⃣  chosen-token down-sampling
-    # ------------------------------------------------------------------
-    rej_pre_chosen = Counter(r["rejected_decoded"] for r in rows)
-    _log_top(rej_pre_chosen, "PRE-CHOSEN")
+    # convert to fractional “weights” via median-threshold regularisation
+    med = float(np.median(list(rej_cts_orig.values())))
+    w_rej = {tok: 1.0 if c <= med else (med / c) ** rejected_reg_strength
+            for tok, c in rej_cts_orig.items()}
 
+    # normalised ratios we *want* to keep in the final dataset
+    total_weighted = sum(w_rej[t] * c for t, c in rej_cts_orig.items())
+    ratio_rej = {tok: (w_rej[tok] * cnt) / total_weighted
+                for tok, cnt in rej_cts_orig.items()}
 
-    rows = [r for r in rows
-            if len(r["multi_chosen_decoded"]) >= min_chosen_tokens]
-    rej_debug = Counter(r["rejected_decoded"] for r in rows)
-    _log_top(rej_debug, "DEBUG")
-    
-
-    if chosen_reg_strength > 0:
-        # 1) tally current chosen-token counts
-        chosen_cts = Counter(tok
+    # ────────────────────────────────────────────────────────────────
+    # 2️⃣  Chosen-token trimming  (build quotas *before* we cut)
+    # ────────────────────────────────────────────────────────────────
+    chosen_cts_orig = Counter(tok
                             for r in rows
                             for tok in (r["multi_chosen_decoded"] or []))
 
-        # 2) convert median-threshold weights → integer *target counts*
-        w_chosen   = _median_threshold(chosen_cts, chosen_reg_strength)
-        tgt_chosen = {tok: int(round(cnt * w_chosen.get(tok, 1.0)))
-                    for tok, cnt in chosen_cts.items()}
+    _log_top(Counter(r["rejected_decoded"] for r in rows), "PRE-CHOSEN")
 
-        # 3) build an index of every occurrence (row-idx, pos-in-list)
-        from collections import defaultdict
-        occ_idx = defaultdict(list)          # tok → [(row_i, pos)]
-        for i, r in enumerate(rows):
-            for p, tok in enumerate(r["multi_chosen_decoded"] or []):
-                occ_idx[tok].append((i, p))
+    w_chosen = {tok: 1.0 if c <= np.median(list(chosen_cts_orig.values()))
+                    else (np.median(list(chosen_cts_orig.values())) / c) ** chosen_reg_strength
+                for tok, c in chosen_cts_orig.items()}
 
-        # 4) for tokens that exceed their quota, randomly blank out surplus
-        for tok, occ in occ_idx.items():
-            surplus = len(occ) - tgt_chosen.get(tok, len(occ))
-            if surplus <= 0:
-                continue
-            rng.shuffle(occ)
-            for row_i, pos in occ[:surplus]:
-                rows[row_i]["multi_chosen_decoded"][pos] = None     # mark
+    tgt_chosen = {tok: int(round(c * w_chosen.get(tok, 1.0)))
+                for tok, c in chosen_cts_orig.items()}
 
-        # 5) remove all marked (=None) tokens from every row
-        for r in rows:
-            r["multi_chosen_decoded"] = [
-                tok for tok in r["multi_chosen_decoded"] if tok is not None
-            ]
+    # --- delete surplus chosen tokens --------------------------------
+    from collections import defaultdict
+    occ = defaultdict(list)                      # tok → [(row_i, pos)]
+    for i, r in enumerate(rows):
+        for p, tok in enumerate(r["multi_chosen_decoded"] or []):
+            occ[tok].append((i, p))
 
-    # ------------------------------------------------------------------
-    #  Debug: rejected-token distribution **after** chosen regularisation
-    # ------------------------------------------------------------------
-    rej_post_chosen = Counter(r["rejected_decoded"] for r in rows)
-    _log_top(rej_post_chosen, "POST-CHOSEN")
+    for tok, all_pos in occ.items():
+        surplus = len(all_pos) - tgt_chosen.get(tok, len(all_pos))
+        if surplus > 0:
+            rng.shuffle(all_pos)
+            for row_i, pos in all_pos[:surplus]:
+                rows[row_i]["multi_chosen_decoded"][pos] = None
 
+    for r in rows:
+        r["multi_chosen_decoded"] = [t for t in r["multi_chosen_decoded"] if t is not None]
 
-    # ------------------------------------------------------------------
-    # 3️⃣  min-chosen filter
-    # ------------------------------------------------------------------
-    rows = [r for r in rows
-            if len(r["multi_chosen_decoded"]) >= min_chosen_tokens]
-    rej_after_chosen = Counter(r["rejected_decoded"] for r in rows)
-    _log_top(rej_after_chosen, "POST-CHOSEN")
+    _log_top(Counter(r["rejected_decoded"] for r in rows), "POST-CHOSEN")
 
-    # ------------------------------------------------------------------
-    # 4️⃣  quota sampling
-    # ------------------------------------------------------------------
+    # ────────────────────────────────────────────────────────────────
+    # 3️⃣  Apply min_chosen_tokens row filter
+    # ────────────────────────────────────────────────────────────────
+    rows = [r for r in rows if len(r["multi_chosen_decoded"]) >= min_chosen_tokens]
+
+    # ────────────────────────────────────────────────────────────────
+    # 4️⃣  Row-level quota sampling **now** that trimming & filtering
+    #     are done.  Scale the original ratios to the remaining size.
+    # ────────────────────────────────────────────────────────────────
+    N_final = max_train_examples or len(rows)
+    target_rows = {tok: int(round(ratio_rej[tok] * N_final))
+                for tok in ratio_rej}
+
     rng.shuffle(rows)
-    accepted, seen = [], defaultdict(int)
+    selected, seen = [], defaultdict(int)
     for r in rows:
         tok = r["rejected_decoded"]
-        if seen[tok] < target.get(tok, 0):
-            accepted.append(r)
+        if seen[tok] < target_rows.get(tok, 0):
+            selected.append(r)
             seen[tok] += 1
-        if len(accepted) >= S:
+        if len(selected) >= N_final:
             break
-    rows = accepted
-    _log_top(Counter(r["rejected_decoded"] for r in rows), "AFTER")
-    logger.info("[ftpo-loader] kept %s / %s rows", len(rows), len(raw))
+    rows = selected
+
+    _log_top(Counter(r["rejected_decoded"] for r in rows), "AFTER-SAMPLING")
+    logger.info("[ftpo-loader] kept %d rows after quota sampling", len(rows))
+
 
     # ------------------------------------------------------------------
     # 5️⃣  tokenisation (unchanged section)
