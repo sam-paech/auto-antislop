@@ -90,7 +90,7 @@ def load_ftpo_multi_dataset(
     med = float(np.median(list(rej_cts_orig.values())))
     w_rej = {tok: 1.0 if c <= med else (med / c) ** rejected_reg_strength
             for tok, c in rej_cts_orig.items()}
-
+    
     # normalised ratios we *want* to keep in the final dataset
     total_weighted = sum(w_rej[t] * c for t, c in rej_cts_orig.items())
     ratio_rej = {tok: (w_rej[tok] * cnt) / total_weighted
@@ -111,6 +111,11 @@ def load_ftpo_multi_dataset(
 
     tgt_chosen = {tok: int(round(c * w_chosen.get(tok, 1.0)))
                 for tok, c in chosen_cts_orig.items()}
+    
+    _log_top(chosen_cts_orig, "ORIGINAL CHOSEN TOKENS")
+    quota_items = sorted(tgt_chosen.items(), key=lambda x: x[1], reverse=True)[:20]
+    quota_str = ", ".join(f"{tok!r}:{quota}" for tok, quota in quota_items)
+    logger.info(f"[ftpo-loader] CHOSEN TARGET QUOTAS top-20 → {quota_str}")
 
     # --- delete surplus chosen tokens --------------------------------
     from collections import defaultdict
