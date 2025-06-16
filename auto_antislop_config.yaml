@@ -259,7 +259,7 @@ finetune_shuffle_seed: 666
 # 0 = off; 0.9 strongly downsamples overrepresented rule violations
 # (this is useful because the raw generated dataset is typically very skewed)
 ftpo_sample_rejected_regularisation_strength: 0.8
-ftpo_sample_chosen_regularisation_strength: 0.5
+ftpo_sample_chosen_regularisation_strength: 0.2
 ftpo_sample_min_chosen_tokens: 4 # filter out ftpo samples that have fewer than this number in the chosen tokens list
 
 # ── FTPO-specific hyper-parameters ─────────────────────────────────────────

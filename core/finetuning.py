@@ -304,7 +304,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             # balance *rejected* tokens
             rejected_reg_strength = config.get("ftpo_sample_rejected_regularisation_strength", 0.8),
             # balance *chosen* tokens
-            chosen_reg_strength   = config.get("ftpo_sample_chosen_regularisation_strength", 0.5),
+            chosen_reg_strength   = config.get("ftpo_sample_chosen_regularisation_strength", 0.2),
             # hard floor on |chosen|
             min_chosen_tokens     = config.get("ftpo_sample_min_chosen_tokens", 3),
             # overall training-set cap (used for per-token quotas too)

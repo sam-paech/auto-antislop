@@ -100,39 +100,39 @@ def load_ftpo_multi_dataset(
     # 2️⃣  Chosen-token trimming  (build quotas *before* we cut)
     # ────────────────────────────────────────────────────────────────
     chosen_cts_orig = Counter(tok
-                            for r in rows
-                            for tok in (r["multi_chosen_decoded"] or []))
+                        for r in rows
+                        for tok in (r["multi_chosen_decoded"] or []))
 
-    _log_top(Counter(r["rejected_decoded"] for r in rows), "PRE-CHOSEN")
+    _log_top(chosen_cts_orig, "ORIGINAL CHOSEN TOKENS")
 
-    w_chosen = {tok: 1.0 if c <= np.median(list(chosen_cts_orig.values()))
-                    else (np.median(list(chosen_cts_orig.values())) / c) ** chosen_reg_strength
-                for tok, c in chosen_cts_orig.items()}
+    # Trim the peak: cap top tokens to match the 10th highest count
+    if len(chosen_cts_orig) >= 10:
+        top_counts = sorted(chosen_cts_orig.values(), reverse=True)
+        cap_value = top_counts[9]  # 10th highest count
+        chosen_cts_capped = Counter()
+        for tok, cnt in chosen_cts_orig.items():
+            chosen_cts_capped[tok] = min(cnt, cap_value)
+    else:
+        chosen_cts_capped = chosen_cts_orig.copy()
+
+    # Now calculate regularization on the capped distribution
+    med_chosen = float(np.median(list(chosen_cts_capped.values())))
+    w_chosen = {tok: 1.0 if c <= med_chosen
+            else (med_chosen / c) ** chosen_reg_strength
+            for tok, c in chosen_cts_capped.items()}
 
     tgt_chosen = {tok: int(round(c * w_chosen.get(tok, 1.0)))
-                for tok, c in chosen_cts_orig.items()}
-    
-    _log_top(chosen_cts_orig, "ORIGINAL CHOSEN TOKENS")
+                for tok, c in chosen_cts_capped.items()}
+
+    # Log the target quotas
     quota_items = sorted(tgt_chosen.items(), key=lambda x: x[1], reverse=True)[:20]
     quota_str = ", ".join(f"{tok!r}:{quota}" for tok, quota in quota_items)
     logger.info(f"[ftpo-loader] CHOSEN TARGET QUOTAS top-20 → {quota_str}")
-
-    # --- delete surplus chosen tokens --------------------------------
-    from collections import defaultdict
-    occ = defaultdict(list)                      # tok → [(row_i, pos)]
-    for i, r in enumerate(rows):
-        for p, tok in enumerate(r["multi_chosen_decoded"] or []):
-            occ[tok].append((i, p))
-
-    for tok, all_pos in occ.items():
-        surplus = len(all_pos) - tgt_chosen.get(tok, len(all_pos))
-        if surplus > 0:
-            rng.shuffle(all_pos)
-            for row_i, pos in all_pos[:surplus]:
-                rows[row_i]["multi_chosen_decoded"][pos] = None
-
-    for r in rows:
-        r["multi_chosen_decoded"] = [t for t in r["multi_chosen_decoded"] if t is not None]
+    logger.info(
+        "          ↳ watch quotas «%s»: %s (was %s)   «%s»: %s (was %s)",
+        _WATCH[0], tgt_chosen.get(_WATCH[0], 0), chosen_cts_orig.get(_WATCH[0], 0),
+        _WATCH[1], tgt_chosen.get(_WATCH[1], 0), chosen_cts_orig.get(_WATCH[1], 0),
+    )
 
     _log_top(Counter(r["rejected_decoded"] for r in rows), "POST-CHOSEN")
 
