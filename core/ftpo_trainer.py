@@ -200,8 +200,18 @@ class FTPOTrainer(DPOTrainer):
     def compute_loss(self, model, inputs, return_outputs=False, **_):
         mode = getattr(self, "loss_mode", "clip") # "clip" | "free": determines whether we clip loss contributions per the ratio of rejected/chosen logits (like orpo)        
         beta = getattr(self, "beta", 0.1) # loss scaling
-        lambda_kl_target   = getattr(self, "lambda_kl_target", 0.1) # how strongly target (chosen/rejected) logits are tethered to reference via kl loss
-        tau_kl_target = getattr(self, "tau_kl_target", 2.0)  # allow the target logits some grace to move before kl loss kicks in
+
+        # We use 3 separate kl terms:
+
+        # 1. A kl term for the *aggregate* of the target tokens (allowing them to move relative to each other but collectively tethered to ref)
+        lambda_kl_target_aggregate   = getattr(self, "lambda_kl_target", 0.1) # how strongly target (chosen/rejected) logits are tethered to reference via kl loss
+        tau_kl_target_aggregate = getattr(self, "tau_kl_target", 2.0)  # allow the target logits some grace to move before kl loss kicks in        
+
+        # 2. A lightly applied tokenwise kl applied to only the target tokens
+        lambda_kl_target_tokenwise   = getattr(self, "lambda_kl_target_tokenwise", 0.05)  # strength
+        tau_kl_target_tokenwise      = getattr(self, "tau_kl_target_tokenwise", 1.0)      # grace region (zero cost movement)
+
+        # 3. A strongly applied tokenwise kl applied to the remaining (non-target) vocab
         lambda_kl = getattr(self, "lambda_kl", 0.4) # how strongly the remaining vocab (other than chosen/rejected) is tethered to reference via kl loss
 
         LOSS_CALC_MODE = getattr(self, "loss_calc_mode", "logits")    # probs / logits. Use probs or logits in the loss function. logits is more surgical (doesn't affect the whole logit distribution).
@@ -381,7 +391,7 @@ class FTPOTrainer(DPOTrainer):
             #       independently of one another.
             # --------------------------------------------------------------            
 
-            if lambda_kl_target:
+            if lambda_kl_target_aggregate:
                 tgt_mask = torch.zeros_like(logits_last, dtype=torch.bool)
                 if "chosen_ids" in inputs:
                     tgt_mask.scatter_(1, ch_ids.masked_select(ch_mask).unsqueeze(1), True)
@@ -395,23 +405,40 @@ class FTPOTrainer(DPOTrainer):
 
                 # give the target logits some grace to move around before kl penalty kicks in                
                 diff = mean_cur - mean_ref                      # [B]
-                excess = torch.clamp(diff.abs() - tau_kl_target, min=0.0) # zero inside ±tau
-                kl_tgt_raw = excess.pow(2).mean()               # quadratic outside band
+                excess = torch.clamp(diff.abs() - tau_kl_target_aggregate, min=0.0) # zero inside ±tau
+                kl_target_aggregate_raw = excess.pow(2).mean()               # quadratic outside band
 
             else:
-                kl_tgt_raw  = logits_last.new_tensor(0.0)
+                kl_target_aggregate_raw  = logits_last.new_tensor(0.0)
+
+            # token-wise soft-band KL on chosen & rejected logits
+            if lambda_kl_target_tokenwise:
+                diff_tok = logits_last - ref_logits_last          # [B,V]
+                # keep only the target positions
+                diff_tok = diff_tok * tgt_mask
+
+                # epsilon-insensitive quadratic: 0 inside ±τ, (|x|-τ)^2 outside
+                excess_tok = torch.clamp(diff_tok.abs() - tau_kl_target_tokenwise, min=0.0)
+                kl_target_tokenwise_raw = (excess_tok.pow(2)).sum() / tgt_mask.sum()
+            else:
+                kl_target_tokenwise_raw = logits_last.new_tensor(0.0)
+
 
             # --------------------------------------------------------------
             # 4. combine
             # --------------------------------------------------------------
-            kl_loss = lambda_kl * kl_elem_raw + lambda_kl_target * kl_tgt_raw
+            kl_loss = (
+                lambda_kl         * kl_elem_raw   # non-target vocab
+                + lambda_kl_target_aggregate  * kl_target_aggregate_raw    # aggregate target
+                + lambda_kl_target_tokenwise   * kl_target_tokenwise_raw    # per-token target
+            )
             loss    = pref_loss + kl_loss
 
             # diagnostics
             extra_metrics.update({
                 "kl_elem"        : kl_elem_raw.detach(),
-                "kl_tgt"         : kl_tgt_raw.detach(),
-                "kl_pref_ratio"  : (kl_loss / (pref_loss + 1e-8)).detach(),
+                "kl_tgt_agg"         : kl_target_aggregate_raw.detach(),
+                "kl_tgt_tokenwise"         : kl_target_tokenwise_raw.detach(),
             })
 
         else:
