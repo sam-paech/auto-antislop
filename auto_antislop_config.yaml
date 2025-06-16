@@ -274,9 +274,9 @@ ftpo_lambda_kl_target_agg: 0.25         # Strength of KL tether on the mean logi
 ftpo_tau_kl_target_agg: 0.0             # Grace bandwidth (logits) before the above KL kicks in.
 
 # KL term 2: light kl loss applied tokenwise on target tokens
-ftpo_lambda_kl_target_tokenwise: 0.25   # Strength of KL tether on the mean logit of the
+ftpo_lambda_kl_target_tokenwise: 0.05   # Strength of KL tether on the individual logits in the
                                         #   chosen+rejected set vs reference.
-ftpo_tau_kl_target_tokenwise: 0.0       # Grace bandwidth (logits) before the above KL kicks in.
+ftpo_tau_kl_target_tokenwise: 1.0       # Grace bandwidth (logits) before the above KL kicks in.
 
 # KL term 3: stronger kl term applied to remaining (non-target) vocab
 ftpo_lambda_kl: 0.4
