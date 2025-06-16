@@ -369,10 +369,12 @@ class FTPOTrainer(DPOTrainer):
             # 2. element-wise KL on *non-target* vocab  (old behaviour)
             # --------------------------------------------------------------
             freeze_mask = torch.ones_like(logits_last, dtype=torch.bool)
-            if "chosen_ids" in inputs:                 # ftpo
-                freeze_mask.scatter_(1, ch_ids.masked_select(ch_mask).unsqueeze(1), False)
-            else:                                      # single-token
+            if "chosen_ids" in inputs:               # ftpo
+                rows = torch.arange(B, device=ch_ids.device).unsqueeze(1).expand_as(ch_ids)
+                freeze_mask[rows[ch_mask], ch_ids[ch_mask]] = False
+            else:                                    # single-token
                 freeze_mask.scatter_(1, chosen.unsqueeze(-1), False)
+
             freeze_mask.scatter_(1, rejected.unsqueeze(-1), False)
 
             if LOSS_CALC_MODE == "logits":
@@ -394,10 +396,13 @@ class FTPOTrainer(DPOTrainer):
             if lambda_kl_target_aggregate:
                 tgt_mask = torch.zeros_like(logits_last, dtype=torch.bool)
                 if "chosen_ids" in inputs:
-                    tgt_mask.scatter_(1, ch_ids.masked_select(ch_mask).unsqueeze(1), True)
+                    rows = torch.arange(B, device=ch_ids.device).unsqueeze(1).expand_as(ch_ids)
+                    tgt_mask[rows[ch_mask], ch_ids[ch_mask]] = True
                 else:
                     tgt_mask.scatter_(1, chosen.unsqueeze(-1), True)
+
                 tgt_mask.scatter_(1, rejected.unsqueeze(-1), True)
+
 
                 tgt_sz      = tgt_mask.sum(-1).clamp(min=1)        # avoid /0
                 mean_cur    = (logits_last * tgt_mask).sum(-1) / tgt_sz
