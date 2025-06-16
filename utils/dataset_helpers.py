@@ -1,8 +1,4 @@
 # utils/dataset_helpers.py
-# ------------------------------------------------------------------
-# Parallel FTPO loader (multi-chosen schema, with dual regularisation
-# and distribution diagnostics)
-# ------------------------------------------------------------------
 from __future__ import annotations
 import logging, os
 from pathlib import Path
@@ -14,50 +10,50 @@ from datasets import load_dataset
 
 logger = logging.getLogger(__name__)
 
+# tokens we want to watch closely
+_WATCH = [" nodded", " leaned"]
+
 
 def load_ftpo_multi_dataset(
     path: Path,
     tokenizer,
     *,
     max_seq_len: int = 4096,
-    rejected_reg_strength: float = 0.0,      # balance *rejected* tokens
-    chosen_reg_strength: float = 0.0,        # balance *chosen* tokens
-    min_chosen_tokens: int = 1,              # floor on |chosen|
-    max_train_examples: int | None = None,   # overall size cap
+    rejected_reg_strength: float = 0.0,
+    chosen_reg_strength: float = 0.0,
+    min_chosen_tokens: int = 1,
+    max_train_examples: int | None = None,
     stop_words: Optional[Collection[str]] = None,
     num_proc: int | None = None,
-    batch_size: int = 512,                   # tokenizer batch size
+    batch_size: int = 512,
 ):
     """
-    Load, regularise and tokenise an FTPO dataset with extensive diagnostics.
-
-    Diagnostics
-    -----------
-    Immediately after reading the raw JSONL the function logs the 20 most
-    frequent *surface* forms of `rejected_decoded`, and logs the same list
-    again after all regularisation / filtering but before tokenisation.
+    Parallel loader for “multi-chosen” FTPO JSONL with dual regularisation.
+    Logs the counts of `_WATCH` tokens at every major stage.
     """
 
     # ------------------------------------------------------------------
     # helpers
     # ------------------------------------------------------------------
-    RNG = np.random.default_rng(3407)
+    rng = np.random.default_rng(3407)
 
-    def _median_threshold(counts: Counter[int], strength: float) -> dict[str, float]:
-        if not counts or strength <= 0:
+    def _median_threshold(cts: Counter[str], strength: float) -> dict[str, float]:
+        if not cts or strength <= 0:
             return {}
-        thresh = float(np.median(list(counts.values())))
-        return {
-            t: 1.0 if c <= thresh else (thresh / c) ** strength
-            for t, c in counts.items()
-        }
+        med = float(np.median(list(cts.values())))
+        return {t: 1.0 if c <= med else (med / c) ** strength for t, c in cts.items()}
 
-    def _log_top(counter: Counter[str], title: str) -> None:
-        head = ", ".join(f"{tok!r}:{cnt}" for tok, cnt in counter.most_common(20))
-        logger.info(f"[ftpo-loader] {title} top-20 → {head}")
+    def _log_top(cts: Counter[str], what: str) -> None:
+        head = ", ".join(f"{tok!r}:{cnt}" for tok, cnt in cts.most_common(20))
+        logger.info(f"[ftpo-loader] {what} top-20 → {head}")
+        logger.info(
+            "          ↳ watch «%s»: %s   «%s»: %s",
+            _WATCH[0], cts[_WATCH[0]],
+            _WATCH[1], cts[_WATCH[1]],
+        )
 
     # ------------------------------------------------------------------
-    # stop-word set (validation only — unchanged)
+    # stop-word list (unchanged)
     # ------------------------------------------------------------------
     if stop_words is None:
         stop_words = {
@@ -70,76 +66,63 @@ def load_ftpo_multi_dataset(
     stop_words = {w.lower() for w in stop_words}
 
     # ------------------------------------------------------------------
-    # 0️⃣  raw load + stable shuffle
+    # 0️⃣  raw load + shuffle
     # ------------------------------------------------------------------
-    raw = load_dataset("json", data_files=str(path), split="train")
-    raw = raw.shuffle(seed=3407)
+    raw = load_dataset("json", data_files=str(path), split="train").shuffle(seed=3407)
     rows = list(raw)
-    N0   = len(rows)
-    if N0 == 0:
+    if not rows:
         raise ValueError(f"{path} contained no rows")
 
-    # pre-reg counts
     rej_counts = Counter(r["rejected_decoded"] for r in rows)
     _log_top(rej_counts, "BEFORE")
 
     # ------------------------------------------------------------------
-    # 1️⃣  quotas for rejected tokens (NO data change yet)
+    # 1️⃣  per-token quotas for rejected (no data mutation)
     # ------------------------------------------------------------------
-    rej_weights = _median_threshold(rej_counts, rejected_reg_strength)
-    S = max_train_examples or N0
-    denom = sum(rej_weights.get(t, 1.0) * c for t, c in rej_counts.items())
-    target_quota = {
-        t: int(round(S * rej_weights.get(t, 1.0) * c / denom))
-        for t, c in rej_counts.items()
-    }
+    quotas = _median_threshold(rej_counts, rejected_reg_strength)
+    S      = max_train_examples or len(rows)
+    total  = sum(quotas.get(t, 1.0) * c for t, c in rej_counts.items())
+    target = {t: int(round(S * quotas.get(t, 1.0) * c / total))
+              for t, c in rej_counts.items()}
 
     # ------------------------------------------------------------------
-    # 2️⃣  chosen-token balancing  (in-place)
+    # 2️⃣  chosen-token down-sampling
     # ------------------------------------------------------------------
     if chosen_reg_strength > 0:
-        chosen_counts = Counter(tok
-            for r in rows
-            for tok in (r["multi_chosen_decoded"] or [])
-        )
-        chosen_w = _median_threshold(chosen_counts, chosen_reg_strength)
-
+        chosen_cts = Counter(tok for r in rows for tok in (r["multi_chosen_decoded"] or []))
+        chosen_w   = _median_threshold(chosen_cts, chosen_reg_strength)
         for r in rows:
-            kept = [
+            r["multi_chosen_decoded"] = [
                 tok for tok in (r["multi_chosen_decoded"] or [])
-                if RNG.random() < chosen_w.get(tok, 1.0)
+                if rng.random() < chosen_w.get(tok, 1.0)
             ]
-            r["multi_chosen_decoded"] = kept
 
     # ------------------------------------------------------------------
-    # 3️⃣  drop rows with too few chosen alts
+    # 3️⃣  min-chosen filter
     # ------------------------------------------------------------------
-    if min_chosen_tokens > 1:
-        rows = [r for r in rows
-                if len(r["multi_chosen_decoded"]) >= min_chosen_tokens]
-    if not rows:
-        raise ValueError("all rows were removed by min_chosen_tokens filter")
+    rows = [r for r in rows
+            if len(r["multi_chosen_decoded"]) >= min_chosen_tokens]
+    rej_after_chosen = Counter(r["rejected_decoded"] for r in rows)
+    _log_top(rej_after_chosen, "POST-CHOSEN")
 
     # ------------------------------------------------------------------
-    # 4️⃣  sample rows to honour rejected-token quotas
+    # 4️⃣  quota sampling
     # ------------------------------------------------------------------
-    accepted, taken = [], defaultdict(int)
-    RNG.shuffle(rows)
-
+    rng.shuffle(rows)
+    accepted, seen = [], defaultdict(int)
     for r in rows:
         tok = r["rejected_decoded"]
-        if taken[tok] < target_quota.get(tok, 0):
+        if seen[tok] < target.get(tok, 0):
             accepted.append(r)
-            taken[tok] += 1
-        if len(accepted) >= S and all(taken[t] >= target_quota[t] for t in target_quota):
+            seen[tok] += 1
+        if len(accepted) >= S:
             break
-
     rows = accepted
     _log_top(Counter(r["rejected_decoded"] for r in rows), "AFTER")
-    logger.info(f"[ftpo-loader] kept {len(rows):,} / {N0:,} rows after regularisation")
+    logger.info("[ftpo-loader] kept %s / %s rows", len(rows), len(raw))
 
     # ------------------------------------------------------------------
-    # 5️⃣  convert to HF Dataset for vectorised tokenisation  (original logic)
+    # 5️⃣  tokenisation (unchanged section)
     # ------------------------------------------------------------------
     from datasets import Dataset
     ds = Dataset.from_list(rows)
@@ -158,9 +141,7 @@ def load_ftpo_multi_dataset(
         ).input_ids
 
         for p_ids, chosen_surf, rej_surf in zip(
-            prompt_tok,
-            batch["multi_chosen_decoded"],
-            batch["rejected_decoded"],
+            prompt_tok, batch["multi_chosen_decoded"], batch["rejected_decoded"]
         ):
             chosen_surf = chosen_surf or []
             chosen_tok_ids = [tokenizer(t, add_special_tokens=False).input_ids
@@ -174,7 +155,6 @@ def load_ftpo_multi_dataset(
                 and rej_surf.strip().lower() not in stop_words
                 and len(p_ids) + 1 <= max_seq_len
             )
-
             if valid and rej_tok_ids[0] in [t[0] for t in chosen_tok_ids]:
                 valid = False
 
@@ -184,9 +164,7 @@ def load_ftpo_multi_dataset(
                 out_chosen.append([t[0] for t in chosen_tok_ids])
                 out_rej.append(rej_tok_ids[0])
             else:
-                out_prompt.append([0])
-                out_chosen.append([0])
-                out_rej.append(0)
+                out_prompt.append([0]); out_chosen.append([0]); out_rej.append(0)
 
         return {
             "prompt_ids":        out_prompt,
@@ -196,16 +174,12 @@ def load_ftpo_multi_dataset(
         }
 
     ds = ds.map(
-        _tok,
-        batched=True,
-        batch_size=batch_size,
+        _tok, batched=True, batch_size=batch_size,
         remove_columns=ds.column_names,
-        num_proc=num_proc,
-        desc="tokenising",
+        num_proc=num_proc, desc="tokenising",
     )
     ds = ds.filter(lambda ex: ex["__valid"], num_proc=num_proc, desc="filter")
     ds = ds.remove_columns("__valid")
-
     if len(ds) == 0:
         raise ValueError("no ftpo samples survived length / sanity checks")
 
