@@ -94,6 +94,13 @@ def load_ftpo_multi_dataset(
     rej_pre_chosen = Counter(r["rejected_decoded"] for r in rows)
     _log_top(rej_pre_chosen, "PRE-CHOSEN")
 
+
+    rows = [r for r in rows
+            if len(r["multi_chosen_decoded"]) >= min_chosen_tokens]
+    rej_debug = Counter(r["rejected_decoded"] for r in rows)
+    _log_top(rej_debug, "DEBUG")
+    
+
     if chosen_reg_strength > 0:
         # 1) tally current chosen-token counts
         chosen_cts = Counter(tok
