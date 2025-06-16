@@ -245,8 +245,8 @@ class FTPOTrainer(DPOTrainer):
             ch_mask = inputs["chosen_mask"].to(device)      # [B,C] bool
             
             # --- rejected token ---------------------------------------------------------
-            rej     = inputs["rejected_token_id"].to(device)  # [B]
-            logp_bad = logp_all.gather(-1, rej.unsqueeze(-1)).squeeze(-1)  # [B]
+            rejected     = inputs["rejected_token_id"].to(device)  # [B]
+            logp_bad = logp_all.gather(-1, rejected.unsqueeze(-1)).squeeze(-1)  # [B]
 
 
             # ---------------------------------------------------------------------------
@@ -266,7 +266,7 @@ class FTPOTrainer(DPOTrainer):
                 weights = torch.clamp((clip_epsilon_probs - margin) / clip_epsilon_probs, 0.0, 1.0) * ch_mask
             else:   # "logits"
                 gathered      = logits_last[batch_rows, ch_ids]   # raw logits
-                logit_bad     = logits_last.gather(-1, rej.unsqueeze(-1))
+                logit_bad     = logits_last.gather(-1, rejected.unsqueeze(-1))
                 margin        = gathered - logit_bad
                 # need probs_good for the weighted mean later
                 logZ          = logits_last.logsumexp(-1, keepdim=True)
@@ -287,11 +287,11 @@ class FTPOTrainer(DPOTrainer):
 
             if LOSS_CALC_MODE == "probs":
                 logp_chosen = logp_all.gather(-1, ch_ids)                 # [B,C]
-                logp_bad    = logp_all.gather(-1, rej.unsqueeze(-1))      # [B,1]
+                logp_bad    = logp_all.gather(-1, rejected.unsqueeze(-1))      # [B,1]
                 delta_tok   = logp_chosen - logp_bad                      # [B,C]
             else:  # "logits" – completely localised, no softmax in loss
                 l_chosen    = logits_last[batch_rows, ch_ids]             # [B,C]
-                l_bad       = logits_last.gather(-1, rej.unsqueeze(-1))   # [B,1]
+                l_bad       = logits_last.gather(-1, rejected.unsqueeze(-1))   # [B,1]
                 delta_tok   = l_chosen - l_bad                            # [B,C]
 
             if mode == "clip":
@@ -360,10 +360,10 @@ class FTPOTrainer(DPOTrainer):
             # --------------------------------------------------------------
             freeze_mask = torch.ones_like(logits_last, dtype=torch.bool)
             if "chosen_ids" in inputs:                 # ftpo
-                freeze_mask.scatter_(1, ch_ids * ch_mask + (~ch_mask) * 0, False)
+                freeze_mask.scatter_(1, ch_ids.masked_select(ch_mask).unsqueeze(1), False)
             else:                                      # single-token
                 freeze_mask.scatter_(1, chosen.unsqueeze(-1), False)
-            freeze_mask.scatter_(1, rej.unsqueeze(-1), False)
+            freeze_mask.scatter_(1, rejected.unsqueeze(-1), False)
 
             if LOSS_CALC_MODE == "logits":
                 diff        = logits_last - ref_logits_last
@@ -384,10 +384,10 @@ class FTPOTrainer(DPOTrainer):
             if lambda_kl_target:
                 tgt_mask = torch.zeros_like(logits_last, dtype=torch.bool)
                 if "chosen_ids" in inputs:
-                    tgt_mask.scatter_(1, ch_ids * ch_mask + (~ch_mask) * 0, True)
+                    tgt_mask.scatter_(1, ch_ids.masked_select(ch_mask).unsqueeze(1), True)
                 else:
                     tgt_mask.scatter_(1, chosen.unsqueeze(-1), True)
-                tgt_mask.scatter_(1, rej.unsqueeze(-1), True)
+                tgt_mask.scatter_(1, rejected.unsqueeze(-1), True)
 
                 tgt_sz      = tgt_mask.sum(-1).clamp(min=1)        # avoid /0
                 mean_cur    = (logits_last * tgt_mask).sum(-1) / tgt_sz
