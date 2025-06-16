@@ -151,63 +151,56 @@ def load_ftpo_multi_dataset(
     target_rows = {tok: int(round(ratio_rej[tok] * N_final))
                 for tok in ratio_rej}
 
-    # Count available rows per token
-    available_rows = defaultdict(list)
-    for i, r in enumerate(rows):
-        available_rows[r["rejected_decoded"]].append(i)
+    rng.shuffle(rows)
+    selected, seen = [], defaultdict(int)
     
-    # First pass: fill what we can, track shortfalls
-    selected_indices = set()
-    seen = defaultdict(int)
-    shortfall = 0
-    
-    for tok, quota in target_rows.items():
-        available = [i for i in available_rows[tok] if i not in selected_indices]
-        rng.shuffle(available)
-        can_fill = min(quota, len(available))
-        
-        for i in available[:can_fill]:
-            selected_indices.add(i)
+    # First pass: try to fill quotas
+    for r in rows:
+        tok = r["rejected_decoded"]
+        if seen[tok] < target_rows.get(tok, 0):
+            selected.append(r)
             seen[tok] += 1
-        
-        shortfall += quota - can_fill
+        if len(selected) >= N_final:
+            break
     
-    # Redistribute shortfall proportionally among tokens that have spare capacity
-    if shortfall > 0 and len(selected_indices) < N_final:
-        redistrib_targets = {}
-        total_spare_weight = 0
+    # Second pass: if still short, keep adding while maintaining proportions
+    if len(selected) < N_final:
+        # Build index of remaining rows by token
+        selected_set = set(selected)
+        remaining_by_token = defaultdict(list)
+        for r in rows:
+            if r not in selected_set:
+                remaining_by_token[r["rejected_decoded"]].append(r)
         
-        for tok in available_rows:
-            used = seen[tok]
-            available_count = len(available_rows[tok])
-            spare = available_count - used
+        # Keep adding until we reach N_final
+        while len(selected) < N_final:
+            # Find token that's furthest below its target ratio AND has rows available
+            best_tok = None
+            best_ratio_diff = -1
             
-            if spare > 0:
-                # Weight by original ratio for proportional redistribution
-                weight = ratio_rej.get(tok, 0)
-                redistrib_targets[tok] = (spare, weight)
-                total_spare_weight += weight
-        
-        # Redistribute shortfall
-        for tok, (spare, weight) in redistrib_targets.items():
-            if total_spare_weight > 0:
-                extra_quota = int(round(shortfall * weight / total_spare_weight))
-                extra_quota = min(extra_quota, spare, N_final - len(selected_indices))
-                
-                available = [i for i in available_rows[tok] if i not in selected_indices]
-                rng.shuffle(available)
-                
-                for i in available[:extra_quota]:
-                    selected_indices.add(i)
-                    seen[tok] += 1
+            for tok, available_rows in remaining_by_token.items():
+                if not available_rows:  # Skip tokens with no remaining rows
+                    continue
                     
-                    if len(selected_indices) >= N_final:
-                        break
+                current_ratio = seen[tok] / len(selected) if len(selected) > 0 else 0
+                target_ratio = ratio_rej.get(tok, 0)
+                ratio_diff = target_ratio - current_ratio
+                
+                if ratio_diff > best_ratio_diff:
+                    best_ratio_diff = ratio_diff
+                    best_tok = tok
             
-            if len(selected_indices) >= N_final:
+            # If no tokens have available rows, we're done
+            if best_tok is None:
                 break
+            
+            # Add one row for the most underrepresented token
+            r = remaining_by_token[best_tok].pop()
+            selected.append(r)
+            seen[best_tok] += 1
     
-    rows = [rows[i] for i in sorted(selected_indices)]
+    rows = selected
+
 
     _log_top(Counter(r["rejected_decoded"] for r in rows), "AFTER-SAMPLING")
     logger.info("[ftpo-loader] kept %d rows after quota sampling", len(rows))
