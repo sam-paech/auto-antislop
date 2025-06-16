@@ -204,8 +204,8 @@ class FTPOTrainer(DPOTrainer):
         # We use 3 separate kl terms:
 
         # 1. A kl term for the *aggregate* of the target tokens (allowing them to move relative to each other but collectively tethered to ref)
-        lambda_kl_target_aggregate   = getattr(self, "lambda_kl_target", 0.1) # how strongly target (chosen/rejected) logits are tethered to reference via kl loss
-        tau_kl_target_aggregate = getattr(self, "tau_kl_target", 2.0)  # allow the target logits some grace to move before kl loss kicks in        
+        lambda_kl_target_aggregate   = getattr(self, "lambda_kl_target_agg", 0.1) # how strongly target (chosen/rejected) logits are tethered to reference via kl loss
+        tau_kl_target_aggregate = getattr(self, "tau_kl_target_agg", 2.0)  # allow the target logits some grace to move before kl loss kicks in        
 
         # 2. A lightly applied tokenwise kl applied to only the target tokens
         lambda_kl_target_tokenwise   = getattr(self, "lambda_kl_target_tokenwise", 0.05)  # strength

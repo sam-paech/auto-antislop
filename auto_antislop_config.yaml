@@ -262,15 +262,23 @@ finetune_ftpo_sample_regularisation_strength: 0.8
 
 # ── FTPO-specific hyper-parameters ─────────────────────────────────────────
 # Leave any of these out (or set to null) to fall back to FTPOTrainer defaults.
-finetune_ftpo_loss_mode: clip            # "clip" | "free"  – apply odds-ratio clipping on the
+ftpo_loss_mode: clip            # "clip" | "free"  – apply odds-ratio clipping on the
                                          #   rejected/chosen gap (ORPO-style) or use raw Δ.
-finetune_ftpo_beta: 0.1                  # Global scale on pref loss (higher = steeper sigmoid).
-finetune_ftpo_lambda_kl_target: 0.25     # Strength of KL tether on the mean logit of the
-                                         #   chosen+rejected set vs reference.
-finetune_ftpo_tau_kl_target: 0.0         # Grace bandwidth (logits) before the above KL kicks in.
-finetune_ftpo_lambda_kl: 0.4             # Strength of KL on the *rest* of the vocab
-                                         #   (all logits except chosen/rejected).
-finetune_ftpo_loss_calc_mode: logits     # "logits" | "probs"
-                                         #   logits → totally local; probs → full softmax view.
-finetune_ftpo_clip_epsilon_probs: 0.2    # When using probs-mode: margin > ε ⇒ loss = 0.
-finetune_ftpo_clip_epsilon_logits: 2     # When using logits-mode: margin > ε ⇒ loss = 0.
+ftpo_beta: 0.1                  # Global scale on pref loss (higher = steeper sigmoid).
+
+# KL term 1: kl loss applied on aggregate to target (chosen + rejected) logits
+ftpo_lambda_kl_target_agg: 0.25         # Strength of KL tether on the mean logit of the
+                                        #   chosen+rejected set vs reference.
+ftpo_tau_kl_target_agg: 0.0             # Grace bandwidth (logits) before the above KL kicks in.
+
+# KL term 2: light kl loss applied tokenwise on target tokens
+ftpo_lambda_kl_target_tokenwise: 0.25   # Strength of KL tether on the mean logit of the
+                                        #   chosen+rejected set vs reference.
+ftpo_tau_kl_target_tokenwise: 0.0       # Grace bandwidth (logits) before the above KL kicks in.
+
+# KL term 3: stronger kl term applied to remaining (non-target) vocab
+ftpo_lambda_kl: 0.4
+
+ftpo_loss_calc_mode: logits     # "logits" | "probs"
+ftpo_clip_epsilon_probs: 0.2    # For a chosen token: "after winning vs rejected token by this margin, preference loss turns off"
+ftpo_clip_epsilon_logits: 2     # Same as above, but for logits mode (margin is specified in logits)

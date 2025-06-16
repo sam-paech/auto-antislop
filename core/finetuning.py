@@ -670,8 +670,10 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         _ftpo_keys = [
             "loss_mode",
             "beta",
-            "lambda_kl_target",
-            "tau_kl_target",
+            "lambda_kl_target_agg",
+            "tau_kl_target_agg",
+            "lambda_kl_target_tokenwise",
+            "tau_kl_target_tokenwise",
             "lambda_kl",
             "loss_calc_mode",
             "clip_epsilon_probs",
