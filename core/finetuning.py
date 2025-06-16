@@ -690,7 +690,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             "clip_epsilon_logits",
         ]
         for k in _ftpo_keys:
-            cfg_key = f"finetune_ftpo_{k}"
+            cfg_key = f"ftpo_{k}"
             if cfg_key in config and config[cfg_key] is not None:
                 setattr(dpo_trainer, k, config[cfg_key])
     # ------------------------------------------------------------------
