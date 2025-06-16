@@ -153,12 +153,14 @@ def load_ftpo_multi_dataset(
 
     rng.shuffle(rows)
     selected, seen = [], defaultdict(int)
+    selected_indices = set()  # Track indices instead of row objects
     
     # First pass: try to fill quotas
-    for r in rows:
+    for i, r in enumerate(rows):
         tok = r["rejected_decoded"]
         if seen[tok] < target_rows.get(tok, 0):
             selected.append(r)
+            selected_indices.add(i)
             seen[tok] += 1
         if len(selected) >= N_final:
             break
@@ -166,11 +168,10 @@ def load_ftpo_multi_dataset(
     # Second pass: if still short, keep adding while maintaining proportions
     if len(selected) < N_final:
         # Build index of remaining rows by token
-        selected_set = set(selected)
         remaining_by_token = defaultdict(list)
-        for r in rows:
-            if r not in selected_set:
-                remaining_by_token[r["rejected_decoded"]].append(r)
+        for i, r in enumerate(rows):
+            if i not in selected_indices:
+                remaining_by_token[r["rejected_decoded"]].append((i, r))
         
         # Keep adding until we reach N_final
         while len(selected) < N_final:
@@ -195,8 +196,9 @@ def load_ftpo_multi_dataset(
                 break
             
             # Add one row for the most underrepresented token
-            r = remaining_by_token[best_tok].pop()
+            idx, r = remaining_by_token[best_tok].pop()
             selected.append(r)
+            selected_indices.add(idx)
             seen[best_tok] += 1
     
     rows = selected
