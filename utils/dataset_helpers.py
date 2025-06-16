@@ -136,6 +136,8 @@ def load_ftpo_multi_dataset(
     # ────────────────────────────────────────────────────────────────
     rows = [r for r in rows if len(r["multi_chosen_decoded"]) >= min_chosen_tokens]
 
+    _log_top(Counter(r["rejected_decoded"] for r in rows), "POST-MIN-FILTER")
+
     # ────────────────────────────────────────────────────────────────
     # 4️⃣  Row-level quota sampling **now** that trimming & filtering
     #     are done.  Scale the original ratios to the remaining size.
