@@ -392,18 +392,15 @@ class FTPOTrainer(DPOTrainer):
             #       but only *on aggregate* so they can still move
             #       independently of one another.
             # --------------------------------------------------------------            
-
+            tgt_mask = torch.zeros_like(logits_last, dtype=torch.bool)
+            if "chosen_ids" in inputs:
+                rows = torch.arange(B, device=ch_ids.device).unsqueeze(1).expand_as(ch_ids)
+                tgt_mask[rows[ch_mask], ch_ids[ch_mask]] = True
+            else:
+                tgt_mask.scatter_(1, chosen.unsqueeze(-1), True)
+            tgt_mask.scatter_(1, rejected.unsqueeze(-1), True)
+            
             if lambda_kl_target_aggregate:
-                tgt_mask = torch.zeros_like(logits_last, dtype=torch.bool)
-                if "chosen_ids" in inputs:
-                    rows = torch.arange(B, device=ch_ids.device).unsqueeze(1).expand_as(ch_ids)
-                    tgt_mask[rows[ch_mask], ch_ids[ch_mask]] = True
-                else:
-                    tgt_mask.scatter_(1, chosen.unsqueeze(-1), True)
-
-                tgt_mask.scatter_(1, rejected.unsqueeze(-1), True)
-
-
                 tgt_sz      = tgt_mask.sum(-1).clamp(min=1)        # avoid /0
                 mean_cur    = (logits_last * tgt_mask).sum(-1) / tgt_sz
                 mean_ref    = (ref_logits_last * tgt_mask).sum(-1) / tgt_sz
