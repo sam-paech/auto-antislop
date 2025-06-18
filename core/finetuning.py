@@ -877,6 +877,10 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         logger.info("Training was fp16/bf16 – merging in-place …")
         merged = model.merge_and_unload()       # still on GPU
         merged = merged.to(torch.float16).cpu() # push to CPU for writing
+        
+        if (getattr(merged.config, "model_type", "") or "").lower() == "gemma3":
+            detie_lm_head(merged)          # clone lm_head so it no longer points at embeddings
+            prepare_gemma3_for_save(merged)  # remove alias, set tie_word_embeddings=False
 
     # 3. write the merged checkpoint
     merged.save_pretrained(
