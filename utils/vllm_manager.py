@@ -10,7 +10,7 @@ from typing import Optional, List
 
 logger = logging.getLogger(__name__)
 
-def _show_tail(log_path: Path, *, n_lines: int = 40) -> None:
+def _show_tail(log_path: Path, *, n_lines: int = 300) -> None:
     """Dump the last *n_lines* of *log_path* to the logger."""
     try:
         if log_path.is_file():
