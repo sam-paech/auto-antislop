@@ -69,14 +69,15 @@ def start_vllm_server(
         return None # Indicate it was already running
 
     cmd = [
-        sys.executable, "-m", "vllm.entrypoints.openai.api_server", # Corrected entrypoint
-        "--model", model_id,
+        #sys.executable, "-m", "vllm.entrypoints.openai.api_server", # Corrected entrypoint
+        #"--model", model_id,
+        "vllm", "serve", model_id,
         "--port", str(port),
-        "--host", "127.0.0.1", # Bind to localhost for security by default
+        "--host", "127.0.0.1",
         "--gpu-memory-utilization", str(gpu_memory_utilization),
         "--max-model-len", str(max_model_len),
         "--dtype", dtype,
-        "--disable-log-requests", # Often good for cleaner logs during generation
+        "--disable-log-requests", # Cleaner logs during generation
         "--uvicorn-log-level", uvicorn_log_level.lower(),
     ]
     if hf_token:

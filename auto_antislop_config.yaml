@@ -89,7 +89,7 @@ generation_force_backtrack: false
   #    This encourages selection of the tail of the top n candidates, for more diverse outputs.
   #    You should probably only use this if using min_p to constrain the distribution.
   #    otherwise you will likely get incoherent completions.
-generation_invert_probs: true
+generation_invert_probs: false
 
 # --- N-gram Validator Settings (for antislop-vllm) ---
 # N-gram ban list file is managed by auto-antislop's iterative process.

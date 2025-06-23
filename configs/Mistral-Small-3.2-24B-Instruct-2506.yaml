@@ -12,7 +12,7 @@ log_level: "INFO"
 # Iteration 1: Generates a dataset using antislop, banning those strings & ngrams. Recomputes the slop strings/ngrams at the end & adds any new slop to the ban lists
 # Iteration 2+: Extra iterations catch slop that emerges after the initial set is banned
 num_iterations: 2 # Minimum 2 iterations (this is enough to catch most slop)
-model_id: "THUDM/GLM-4-32B-0414" # Global model id for the pipeline. Can be overridden on individual steps.
+model_id: "mistralai/Mistral-Small-3.2-24B-Instruct-2506" # Global model id for the pipeline. Can be overridden on individual steps.
 
 # !! NEEDED TO SET ATTN TO EAGER
 # add to finetuning.py after model load:
@@ -32,7 +32,7 @@ vllm_gpu_memory_utilization: 0.85 # leave some room for the refusal classifier i
 vllm_max_model_len: 4500
 vllm_dtype: "bfloat16"
 # Additional raw CLI arguments for vLLM server, e.g., ["--tensor-parallel-size", "4"] for multiple gpus
-vllm_extra_args: ["--quantization", "bitsandbytes"]
+vllm_extra_args: ["--tokenizer_mode", "mistral", "--load_format", "mistral", "--config_format", "mistral"]
 vllm_env:                  # env vars for the vLLM process
   # VLLM_USE_V1: "1"  # may be needed for amd gpus
 
@@ -59,7 +59,7 @@ generation_hf_dataset_name: 'Nitral-AI/Reddit-SFW-Writing_Prompts_ShareGPT'
 generation_hf_dataset_split: 'train'
 # A huggingface model id or local dir containing the tokeniser you want to use to apply chat templates.
 # This is important if you are generating a ftpo dataset for later training.
-generation_chat_template_model_id: null # (if unset, uses model_id)
+generation_chat_template_model_id: 'unsloth/Mistral-Small-3.1-24B-Instruct-2503' # transformers errors if we use 3.2's tokeniser
 
 # --- Logging ---
 generation_logging_level: 'INFO' # Logging level for antislop-vllm script
