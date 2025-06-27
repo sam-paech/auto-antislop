@@ -418,7 +418,7 @@ class FTPOTrainer(DPOTrainer):
             # In probability-space when LOSS_CALC_MODE == "probs"; otherwise fall
             # back to the original quadratic-logit version.
             #
-            TAU_TW_PROBS    = 0.25      # ± log-prob band where KL = 0
+            TAU_TW_PROBS    = 0.0      # ± log-prob band where KL = 0
             LAMBDA_TW_PROBS = 0.35      # weight for the prob-space term
 
             if LOSS_CALC_MODE == "probs":
