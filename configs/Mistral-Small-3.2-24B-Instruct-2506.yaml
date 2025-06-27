@@ -12,7 +12,7 @@ log_level: "INFO"
 # Iteration 1: Generates a dataset using antislop, banning those strings & ngrams. Recomputes the slop strings/ngrams at the end & adds any new slop to the ban lists
 # Iteration 2+: Extra iterations catch slop that emerges after the initial set is banned
 num_iterations: 2 # Minimum 2 iterations (this is enough to catch most slop)
-model_id: "mistralai/Mistral-Small-3.2-24B-Instruct-2506" # Global model id for the pipeline. Can be overridden on individual steps.
+model_id: "unsloth/Mistral-Small-3.2-24B-Instruct-2506" #"mistralai/Mistral-Small-3.2-24B-Instruct-2506" # Global model id for the pipeline. Can be overridden on individual steps.
 
 # !! NEEDED TO SET ATTN TO EAGER
 # add to finetuning.py after model load:
@@ -34,7 +34,7 @@ vllm_dtype: "bfloat16"
 # Additional raw CLI arguments for vLLM server, e.g., ["--tensor-parallel-size", "4"] for multiple gpus
 vllm_extra_args: ["--tokenizer_mode", "mistral", "--load_format", "mistral", "--config_format", "mistral"]
 vllm_env:                  # env vars for the vLLM process
-  # VLLM_USE_V1: "1"  # may be needed for amd gpus
+  VLLM_USE_V1: "0"  # may be needed for amd gpus
 
 
 ################################################################################
@@ -51,15 +51,15 @@ generation_api_key: "xxx" # API key for the vLLM server
 
 # --- Core Generation Settings ---
 generation_max_new_tokens: 1000
-generation_threads: 30 # Number of parallel threads for API queries in antislop-vllm. Note: vllm can become very inefficient if you go over some concurrency threshold (depending on vram)
-generation_max_prompts: 1200 # Number of samples to generate from the prompts in the dataset
+generation_threads: 50 # Number of parallel threads for API queries in antislop-vllm. Note: vllm can become very inefficient if you go over some concurrency threshold (depending on vram)
+generation_max_prompts: 1500 # Number of samples to generate from the prompts in the dataset
 
 # --- Dataset & Chat Template ---
-generation_hf_dataset_name: 'Nitral-AI/Reddit-SFW-Writing_Prompts_ShareGPT'
+generation_hf_dataset_name: 'ganjaninja/writing-prompts-sfw-nsfw-interleaved' #'Nitral-AI/Reddit-SFW-Writing_Prompts_ShareGPT'
 generation_hf_dataset_split: 'train'
 # A huggingface model id or local dir containing the tokeniser you want to use to apply chat templates.
 # This is important if you are generating a ftpo dataset for later training.
-generation_chat_template_model_id: 'unsloth/Mistral-Small-3.1-24B-Instruct-2503' # transformers errors if we use 3.2's tokeniser
+generation_chat_template_model_id: 'unsloth/Mistral-Small-3.2-24B-Instruct-2506' #'unsloth/Mistral-Small-3.1-24B-Instruct-2503' # transformers errors if we use 3.2's tokeniser
 
 # --- Logging ---
 generation_logging_level: 'INFO' # Logging level for antislop-vllm script
@@ -200,10 +200,10 @@ whitelist_strings: [
 # Note: unoptimised regex patterns can slow down antislop generation, as they will be called often on large texts.
 extra_regex_patterns: [
     # These ones ban "it's not x, it's y" type patterns:
-    #"\\bnot\\s+(?:just|only|merely)?\\s*(?:(?!but\\b|[.?!]).){1,50}?[,;:—–-]?\\s*but\\s+(?:also\\s+)?",
-    #"\\bnot\\s+only\\s+(?:(?!but\\b|[.?!]).){1,50}?[,;:—–-]?\\s*but\\s+also\\s+",
-    #"\\bit'?s\\s+not\\s+(?:just|only|merely)?\\s*(?:(?!it'?s\\b|[.?!]).){1,50}?[,;:—–-]\\s*it'?s\\s+",
-    #"\\b(?:(?!is\\b|[.?!]).){1,50}?is\\s+not\\s+(?:just\\s+|only\\s+)?(?:about\\s+)?(?:(?!it'?s\\b|[.?!]).){1,50}?[,;:—–-]\\s*it'?s\\s+(?:about\\s+)?"
+    "\\bnot\\s+(?:just|only|merely)?\\s*(?:(?!but\\b|[.?!]).){1,50}?[,;:—–-]?\\s*but\\s+(?:also\\s+)?",
+    "\\bnot\\s+only\\s+(?:(?!but\\b|[.?!]).){1,50}?[,;:—–-]?\\s*but\\s+also\\s+",
+    "\\bit'?s\\s+not\\s+(?:just|only|merely)?\\s*(?:(?!it'?s\\b|[.?!]).){1,50}?[,;:—–-]\\s*it'?s\\s+",
+    "\\b(?:(?!is\\b|[.?!]).){1,50}?is\\s+not\\s+(?:just\\s+|only\\s+)?(?:about\\s+)?(?:(?!it'?s\\b|[.?!]).){1,50}?[,;:—–-]\\s*it'?s\\s+(?:about\\s+)?"
 ]
 
 ################################################################################
@@ -217,7 +217,7 @@ finetune_mode: "ftpo" # dpo / ftpo (final token preference optimisation)
 finetune_ftpo_dataset: ""   # you can specify an existing ftpo dataset, or leave unset to let the
                             # pipeline use the one produced in the generation step
 finetune_base_model_id: null # Base model for DPO (if unset, uses model_id)
-finetune_max_seq_length: 3500 # this may truncate some outputs
+finetune_max_seq_length: 2500 # this may truncate some outputs
 finetune_load_in_4bit: true # qlora
 
 # --- Early Stopping ---
@@ -226,19 +226,19 @@ finetune_early_stopping_wins: 0.85  # Early stopping threshold for fraction of *
 finetune_early_stopping_loss: null  # Loss threshold for early stopping. Set to null to disable.
 
 # --- LoRA Configuration ---
-finetune_lora_r: 128 # the ftpo trainer works best with a high lora rank
-finetune_lora_alpha: 128
+finetune_lora_r: 200 # the ftpo trainer works best with a high lora rank
+finetune_lora_alpha: 64
 finetune_lora_dropout: 0.05
 finetune_weight_decay: 0.01
-finetune_target_modules: ["lm_head"]  #["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj", "lm_head"]
+finetune_target_modules: ["up_proj", "down_proj", "lm_head"]
 
 # --- Layer Freezing ---
-finetune_freeze_early_layers: false
-finetune_n_layers_unfrozen: 10
+finetune_freeze_early_layers: true
+finetune_n_layers_unfrozen: 3
 
 # --- Training Process ---
 finetune_gradient_checkpointing: "unsloth"
-finetune_chat_template: "" # e.g. "gemma-3" -- get the chat template from unsloth's helper if required, otherwise leave the string blank to use the tokeniser's chat template
+finetune_chat_template: "" # e.g. "gemma-3" -- get the chat template from unsloth's helper if required, otherwise leave the string blank to use the tokeniser>
 finetune_batch_size: 1
 finetune_gradient_accumulation_steps: 16
 finetune_warmup_ratio: 0.1
@@ -247,26 +247,26 @@ finetune_num_epochs: 1
 # --- Learning Rate ---
 finetune_learning_rate: 0.000001
 finetune_auto_learning_rate: true  # true: automatically determine learning rate based on dataset size, effective batch size & lora rank
-finetune_auto_learning_rate_adjustment_scaling: 0.15 # scale the auto-lr by this factor
+finetune_auto_learning_rate_adjustment_scaling: 0.04 # scale the auto-lr by this factor
 
 # --- DPO/FTPO Specific ---
 finetune_beta: 0.1 # DPO beta
 
-# --- Output & Saving ---
+# --- Output & Saving ---                                                                                                                                     
 finetune_output_dir_suffix: "_ftpo_exp01" # Appended to experiment run dir
 finetune_save_merged_16bit: true
 finetune_save_gguf_q8_0: false
 
 # --- Dataset Handling for Finetuning ---
-finetune_max_train_examples: 8000 # adjust as needed
+finetune_max_train_examples: 14000 # adjust as needed
 finetune_shuffle_seed: 666
-
+                                                                                                                                                              
 # --- FTPO Sample Regularization ---
 # 0 = off; 0.9 strongly downsamples overrepresented rule violations
 # (this is useful because the raw generated dataset is typically very skewed)
-ftpo_sample_rejected_regularisation_strength: 0.8
+ftpo_sample_rejected_regularisation_strength: 0.7
 ftpo_sample_chosen_regularisation_strength: 0.2
-ftpo_sample_min_chosen_tokens: 4 # filter out ftpo samples that have fewer than this number in the chosen tokens list
+ftpo_sample_min_chosen_tokens: 3 # filter out ftpo samples that have fewer than this number in the chosen tokens list
 
 # ── FTPO-specific hyper-parameters ─────────────────────────────────────────
 # Leave any of these out (or set to null) to fall back to FTPOTrainer defaults.
@@ -277,12 +277,12 @@ ftpo_beta: 0.1                  # Global scale on pref loss (higher = steeper si
 # KL term 1: kl loss applied on aggregate to target (chosen + rejected) logits
 ftpo_lambda_kl_target_agg: 0.0         # Strength of KL tether on the mean logit of the
                                         #   chosen+rejected set vs reference.
-ftpo_tau_kl_target_agg: 0.0             # Grace bandwidth (logits) before the above KL kicks in.
+ftpo_tau_kl_target_agg: 1.0             # Grace bandwidth (logits) before the above KL kicks in.
 
 # KL term 2: light kl loss applied tokenwise on target tokens
 ftpo_lambda_kl_target_tokenwise: 0.25   # Strength of KL tether on the individual logits in the
                                         #   chosen+rejected set vs reference.
-ftpo_tau_kl_target_tokenwise: 1.0       # Grace bandwidth (logits) before the above KL kicks in.
+ftpo_tau_kl_target_tokenwise: 0.5       # Grace bandwidth (logits) before the above KL kicks in.
 
 # KL term 3: stronger kl term applied to remaining (non-target) vocab
 ftpo_lambda_kl: 0.4

@@ -413,17 +413,50 @@ class FTPOTrainer(DPOTrainer):
             else:
                 kl_target_aggregate_raw  = logits_last.new_tensor(0.0)
 
-            # token-wise soft-band KL on chosen & rejected logits
-            if lambda_kl_target_tokenwise:
-                diff_tok = logits_last - ref_logits_last          # [B,V]
-                # keep only the target positions
-                diff_tok = diff_tok * tgt_mask
+            # ── token-wise KL on {chosen ∪ rejected} ──────────────────────────────
+            #
+            # In probability-space when LOSS_CALC_MODE == "probs"; otherwise fall
+            # back to the original quadratic-logit version.
+            #
+            TAU_TW_PROBS    = 0.25      # ± log-prob band where KL = 0
+            LAMBDA_TW_PROBS = 0.35      # weight for the prob-space term
 
-                # epsilon-insensitive quadratic: 0 inside ±τ, (|x|-τ)^2 outside
-                excess_tok = torch.clamp(diff_tok.abs() - tau_kl_target_tokenwise, min=0.0)
-                kl_target_tokenwise_raw = (excess_tok.pow(2)).sum() / tgt_mask.sum()
+            if LOSS_CALC_MODE == "probs":
+                # ----- build mask for the target positions ------------------------
+                tgt_mask = torch.zeros_like(logits_last, dtype=torch.bool)
+                if "chosen_ids" in inputs:                       # ftpo path
+                    rows = torch.arange(B, device=ch_ids.device).unsqueeze(1).expand_as(ch_ids)
+                    tgt_mask[rows[ch_mask], ch_ids[ch_mask]] = True
+                else:                                            # single-token path
+                    tgt_mask.scatter_(1, chosen.unsqueeze(-1), True)
+                tgt_mask.scatter_(1, rejected.unsqueeze(-1), True)
+
+                # ----- log-probs ---------------------------------------------------
+                cur_lp = F.log_softmax(logits_last,     dim=-1)  # [B, V]
+                ref_lp = F.log_softmax(ref_logits_last, dim=-1)
+
+                # KL(ref‖cur) element-wise, masked
+                kl_elem = (ref_lp.exp() * (ref_lp - cur_lp)) * tgt_mask
+
+                # dead-zone: ignore differences inside ±τ in log-prob space
+                lp_gap  = (cur_lp - ref_lp).abs()
+                active  = lp_gap > TAU_TW_PROBS
+
+                kl_target_tokenwise_raw = (kl_elem * active).sum() / tgt_mask.sum()
+
+                # weight straight away so kl_loss combiner stays clean
+                kl_target_tokenwise = LAMBDA_TW_PROBS * kl_target_tokenwise_raw
             else:
-                kl_target_tokenwise_raw = logits_last.new_tensor(0.0)
+                if lambda_kl_target_tokenwise:
+                    diff_tok = logits_last - ref_logits_last          # [B,V]
+                    # keep only the target positions
+                    diff_tok = diff_tok * tgt_mask
+
+                    # epsilon-insensitive quadratic: 0 inside ±τ, (|x|-τ)^2 outside
+                    excess_tok = torch.clamp(diff_tok.abs() - tau_kl_target_tokenwise, min=0.0)
+                    kl_target_tokenwise_raw = (excess_tok.pow(2)).sum() / tgt_mask.sum()
+                else:
+                    kl_target_tokenwise_raw = logits_last.new_tensor(0.0)
 
 
             # --------------------------------------------------------------
