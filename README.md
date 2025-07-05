@@ -181,6 +181,8 @@ This script automatically searches for the most recent `merged_16bit` model in t
 
 FTPO (Final-Token Preference Optimisation) is a surgical preference optimisation training algorithm that constrains gradient updates to just a rejected/chosen *continuation token*, and avoids training on the preceding context. The intent is to push probability mass **away from the first token of a banned phrase (the *rejected* token)** and **toward one or more viable alternatives (the *chosen* tokens)** while leaving the rest of the model distribution largely intact.
 
+The loss function operates entirely in logit-space (in contrast to most preference optimisation trainers that use softmax), resulting in minimalist targeted weight updates.
+
 ---
 
 #### 1. How a training example is created in the Auto-Antislop pipeline
@@ -206,62 +208,63 @@ Result: a single JSONL line contains the shared context plus one rejected token 
 
 #### 2. Loss formulation
 
-* **Preference term.**
+**Preference term.**
   For each example the trainer computes
-  `Δ = logit(chosen) − logit(rejected)` (or the equivalent in probability space).
-  The loss is `−log σ(β Δ)` in “free” mode or a clipped variant in “clip” mode. Or in plain English, the amount that all the chosen logits are beating the rejected, averaged across chosen tokens for that sample.
+  `Δ = logit(chosen) − logit(rejected)`
+  for all chosen+rejected pairs. In a given sample there is 1 rejected and typically 4+ chosen tokens.
+  The loss is a function of the amount that all the chosen logits are beating the rejected, averaged across chosen tokens for that sample.
   This encourages the model to rank *every* chosen token above the rejected one.
   Once a chosen logit is beating rejected by a given margin, it no longer contributes to the loss. This helps to avoid unnecessarily moving the weights when chosen is already winning.
 
-* **Two-part KL regulariser.**
-  A key part of the loss function is the KL loss, which is split into two terms:
+**Three-term MSE regulariser.**
+  A key part of the loss function is the MSE loss which is split into three terms:
 
-  ```
-  λ_kl · KL_non-target + λ_kl_target · KL_target
-  ```
+    * lambda_mse \* mse_non_target +
+    * lambda_mse_target_aggregate \* mse_target_aggregate +
+    * lambda_mse_target_tokenwise \* mse_target_tokenwise
 
-  Where "target" refers to the chosen & rejected logits.
+  Where "target" refers to the chosen & rejected logits for a given training example, and non-target refers to the remaining vocab.
 
-   * **KL\_target**: We need the target logits to move significantly, in order to suppress the top "slop" logit and let the other candidates win. So they cannot be naively constrained to the reference, like they would be with ordinary KL loss. Instead, we define this `kl_target` term as the *mean* divergence from reference of the chosen + rejected set. This allows these logits more freedom to move relative to each other, while still being overall anchored to the reference.
-   The target logits are also allowed some grace to move before kl loss kicks in, per the `tau_kl_target` parameter. So small logit shifts in the target tokens are free but large shifts are penalised quadratically.
+  We use MSE loss in logit space rather than KL loss, because applying softmax as part of the loss function (like KL does) creates learning pressure on the whole vocab, when we are instead trying to do minimal targeted gradient updates.
 
-   * **KL\_non-target**: This loss term applies exclusively to the rest of the vocabulary (all tokens not in {chosen ∪ rejected}). This is the traditional kl loss idea from DPO which constrains those logits to the reference.
+   * **mse_target_tokenwise**: This term applies tokenwise loss pressure on just the target tokens (rejected & chosen) to keep them close to the original weights. We apply this separately so that we can apply a weaker MSE loss to the target tokens, allowing them to move more freely than the remainder of the vocab. This is because the target tokens need to move significantly relative to one another, since the "rejected" token is typically highest prob by a large margin (that's why it's slop!). Generally you should enable *either* mse_target_tokenwise or mse_target_aggregate.
+   * **lambda_mse_target_tokenwise**: The scaling strength applied to the mse_target_tokenwise term. Set to 0 in the config to disable this loss term.
+   * **mse_target_aggregate**: This term applies loss pressure on the target tokens *on aggregate*. This allows the chosen & rejected logits to move relative to each other without penalty, until the **average** of all the chosen + rejected logits diverges from the baseline. This allows the model to learn the preference task more easily, compared to mse_target_tokenwise. The tradeoff is that the weights are able to move further from baseline, which can lead to model collapse in some models, if overtrained. Some models do better with mse_target_tokenwise, and some with mse_target_aggregate.
+   * **lambda_mse_target_aggregate**: The scaling strength applied to the mse_target_aggregate term. Set to 0 in the config to disable this loss term.
+   * **mse_non_target**: This loss term represents tokenwise loss for the remaining vocab (other than the target chosen + rejected tokens).
+   * **lambda_mse**: The scaling strength applied to the mse_non_target term. Set to 0 in the config to disable this loss term.
 
-  This split lets the model reorder the chosen/rejected logits relative to each other while avoiding unwanted drift elsewhere.
+**Tau parameters**
+   There is also a `tau` parameter for each of the two *target* loss terms, which acts as penalty free range (in logits) within which logits can move relative to baseline without incurring loss. Setting tau to > 0 can be helpful when using mse_target_tokenwise, to allow the model to learn more easily and reach higher preference accuracies when training. A reasonable range is 0-1.5. Higher values may lead to degradation with some models.
 
+**Which to choose: mse_target_tokenwise or mse_target_aggregate**
+  You can use both loss terms together, but mse_target_tokenwise will tend dominate as it's a applied per-token, where the aggregate term allows logits to move significantly before it kicks in.
+  Some models can tolerate the more permissive mse_target_aggregate term without degrading; other models are more sensitive and need mse_target_tokenwise to keep logits closer to baseline.
+  Check in the `configs/` dir for training recipes for specific models that have worked.
 
 #### 3. FTPO Tunable hyper-parameters
 
-* **`loss_mode`**
-  `"clip"` (default) or `"free"`.
+** These are settable in the config file: **
+```
+# ── FTPO-specific hyper-parameters ─────────────────────────────────────────
+# Leave any of these out (or set to null) to fall back to FTPOTrainer defaults.
+ftpo_beta: 0.1                  # Global scale on pref loss (higher = steeper sigmoid).
 
-  * **clip** – applies the epsilon thresholds below so that, once a chosen token is comfortably ahead of the rejected one, its contribution to the loss is capped.
-  * **free** – uses the raw `−log σ(β Δ)` everywhere; stronger gradients but higher risk of overshooting.
+# MSE loss term 1: mse loss applied on aggregate to target (chosen + rejected) logits
+ftpo_lambda_mse_target_agg: 0.0         # Strength of MSE loss tether on the mean logit of the
+                                        #   chosen+rejected set vs reference.
+ftpo_tau_mse_target_agg: 0.0            # Grace bandwidth (logits) before the above MSE loss kicks in.
 
-* **`beta`** *(float, default 0.1)*
-  Scales the preference term. Smaller values dampen gradients; larger values make the model push logit differences more aggressively.
+# MSE loss term 2: light mse loss applied tokenwise on target tokens
+ftpo_lambda_mse_target_tokenwise: 0.25  # Strength of MSE loss tether on the individual logits in the
+                                        #   chosen+rejected set vs reference.
+ftpo_tau_mse_target_tokenwise: 1.0      # Grace bandwidth (logits) before the above MSE loss kicks in.
 
-* **`LOSS_CALC_MODE`**
-  `"logits"` (default) or `"probs"`.
+# MSE loss term 3: stronger mse term applied to remaining (non-target) vocab
+ftpo_lambda_mse: 0.4
 
-  * **logits** – works directly in logit space; only the local logits move, leaving the softmax normalisation unchanged for the rest of the vocab.
-  * **probs** – converts to probabilities first; gentler, but every token’s prob is indirectly affected by the softmax.
-
-* **`clip_epsilon_logits`** *(float, default 2)*
-  When in `"logits"` mode and `loss_mode="clip"`, the loss stops growing once `logit(chosen) − logit(rejected)` exceeds this value.
-
-* **`clip_epsilon_probs`** *(float, default 0.2)*
-  Analogous threshold for `"probs"` mode, defined on probability differences.
-
-* **`lambda_kl`** *(float, default 0.4)*
-  Weight of **KL\_non-target** – keeps all *other* vocabulary logits near the reference model.
-
-* **`lambda_kl_target`** *(float, default 0.1)*
-  Weight of **KL\_target** – steadies the *mean* of the chosen + rejected set.
-
-* **`tau_kl_target`** *(float, default 2.0)*
-  Grace band for **KL\_target**. Shifts of ≤ `tau_kl_target` are free; beyond that the quadratic penalty kicks in.
-
+ftpo_clip_epsilon_logits: 2     # For a chosen token: "after winning vs rejected token by this margin, preference loss turns off"
+```
  
 
 ---
@@ -278,3 +281,25 @@ Result: a single JSONL line contains the shared context plus one rejected token 
 *   **Unsloth Cache:** Unsloth might create a `unsloth_compiled_cache` directory. This is ignored by git.
 *   **Gemma-3 Checkpoints:** The `utils/model_helpers.py` contains a `fix_gemma3_checkpoint` function to handle potential inconsistencies in Gemma-3 model key naming, and `detie_lm_head` to ensure proper saving of merged models.
 *   **FTPO Mode:** The "ftpo" (Final Token Preference Optimization) mode uses `FTPOTrainer` which focuses on the preference for a single next token, given a context. This is useful for correcting specific token choices rather than entire continuations.
+
+
+## Citation
+
+If you use Auto-Antislop or the concepts from the original `antislop-sampler` in your research, please consider citing:
+
+```bibtex
+@misc{paech2024antislop,
+      title={AntiSlop Sampler},
+      author={Samuel J. Paech},
+      year={2024},
+      howpublished={\url{https://github.com/sam-paech/antislop-sampler}}
+}
+
+@misc{paech2024antislop,
+      title={Auto-Antislop},
+      author={Samuel J. Paech},
+      year={2025},
+      howpublished={\url{https://github.com/sam-paech/auto-antislop}}
+}
+```
+And/or link to this repository: `https://github.com/sam-paech/auto-antislop`

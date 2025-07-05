@@ -189,67 +189,54 @@ class FTPOTrainer(DPOTrainer):
 
         return batch
 
-
-        
-
-    # --------------------------------------------------------------------- #
-    #  Allowed modes:
-    #     "free"  – untethered (raw Δ)
-    #     "clip"  – odds-ratio clipping with ε
-    # --------------------------------------------------------------------- #
     def compute_loss(self, model, inputs, return_outputs=False, **_):
-        mode = getattr(self, "loss_mode", "clip") # "clip" | "free": determines whether we clip loss contributions per the ratio of rejected/chosen logits (like orpo)        
-        beta = getattr(self, "beta", 0.1) # loss scaling
+            # We use 3 separate MSE loss terms:
 
-        # We use 3 separate kl terms:
+            # 1. A mse term for the *aggregate* of the target tokens (allowing them to move relative to each other but collectively tethered to ref)
+            lambda_mse_target_aggregate   = getattr(self, "lambda_mse_target_agg", 0.1) # how strongly target (chosen/rejected) logits are tethered to reference via mse loss
+            tau_mse_target_aggregate = getattr(self, "tau_mse_target_agg", 2.0)  # allow the target logits some grace to move before mse loss kicks in        
 
-        # 1. A kl term for the *aggregate* of the target tokens (allowing them to move relative to each other but collectively tethered to ref)
-        lambda_kl_target_aggregate   = getattr(self, "lambda_kl_target_agg", 0.1) # how strongly target (chosen/rejected) logits are tethered to reference via kl loss
-        tau_kl_target_aggregate = getattr(self, "tau_kl_target_agg", 2.0)  # allow the target logits some grace to move before kl loss kicks in        
+            # 2. A lightly applied tokenwise MSE loss applied to only the target tokens
+            lambda_mse_target_tokenwise   = getattr(self, "lambda_mse_target_tokenwise", 0.05)  # strength
+            tau_mse_target_tokenwise      = getattr(self, "tau_mse_target_tokenwise", 1.0)      # grace region (zero cost movement)
 
-        # 2. A lightly applied tokenwise kl applied to only the target tokens
-        lambda_kl_target_tokenwise   = getattr(self, "lambda_kl_target_tokenwise", 0.05)  # strength
-        tau_kl_target_tokenwise      = getattr(self, "tau_kl_target_tokenwise", 1.0)      # grace region (zero cost movement)
+            # 3. A strongly applied tokenwise MSE loss applied to the remaining (non-target) vocab
+            lambda_mse = getattr(self, "lambda_mse", 0.4) # how strongly the remaining vocab (other than chosen/rejected) is tethered to reference via mse loss
 
-        # 3. A strongly applied tokenwise kl applied to the remaining (non-target) vocab
-        lambda_kl = getattr(self, "lambda_kl", 0.4) # how strongly the remaining vocab (other than chosen/rejected) is tethered to reference via kl loss
+            # loss contribution is clipped if (chosen - rejected) logits delta is above this
+            clip_epsilon_logits  = getattr(self, "clip_epsilon_logits", 2) 
 
-        LOSS_CALC_MODE = getattr(self, "loss_calc_mode", "logits")    # probs / logits. Use probs or logits in the loss function. logits is more surgical (doesn't affect the whole logit distribution).
-        clip_epsilon_probs  = getattr(self, "clip_epsilon_probs", 0.2) # (when in probs mode): loss contribution is clipped if (chosen - rejected) probs delta is above this
-        clip_epsilon_logits  = getattr(self, "clip_epsilon_logits", 2) # (when in logits mode): loss contribution is clipped if (chosen - rejected) logits delta is above this
+            USE_MSE_LOSS=True # tether all the logits other than the ones we are interested in moving to the reference
 
-        USE_KL_LOSS=True # tether all the logits other than the ones we are interested in moving to the reference
+            # ── unpack ---------------------------------------------------------
+            device   = next(model.parameters()).device            # works for DP / DDP
+            ids   = inputs["prompt_ids"].to(device)               # [B,L]
+            attn  = inputs["attention_mask"].to(device)           # [B,L]
+            B, L  = ids.shape
+            
+            # Find the last real token position for each sequence
+            seq_len  = attn.sum(1)                         # [B] - number of real tokens
 
-        # ── unpack ---------------------------------------------------------
-        device   = next(model.parameters()).device            # works for DP / DDP
-        ids   = inputs["prompt_ids"].to(device)               # [B,L]
-        attn  = inputs["attention_mask"].to(device)           # [B,L]
-        B, L  = ids.shape
-        
-        # Find the last real token position for each sequence
-        seq_len  = attn.sum(1)                         # [B] - number of real tokens
+            # Position encoding setup
+            pad_off  = (L - seq_len).unsqueeze(1)
+            arange_L = torch.arange(L, device=ids.device).unsqueeze(0)
+            pos_full = (arange_L - pad_off).clamp(min=0)
+            pos_full = pos_full.masked_fill(attn == 0, 0)
 
-        # Position encoding setup
-        pad_off  = (L - seq_len).unsqueeze(1)
-        arange_L = torch.arange(L, device=ids.device).unsqueeze(0)
-        pos_full = (arange_L - pad_off).clamp(min=0)
-        pos_full = pos_full.masked_fill(attn == 0, 0)
-
-        # ------------- Single forward pass ---------------------------------
-        outputs = model(
-            ids,
-            attention_mask=attn,
-            position_ids=pos_full,
-            use_cache=False,
-            return_dict=True,
-        )
-        
-        # With left padding, the last token is always at position -1
-        logits_last = outputs.logits[:, -1, :]  # [B, V]
-        logp_all = F.log_softmax(logits_last, dim=-1)  # [B, V]
+            # ------------- Single forward pass ---------------------------------
+            outputs = model(
+                ids,
+                attention_mask=attn,
+                position_ids=pos_full,
+                use_cache=False,
+                return_dict=True,
+            )
+            
+            # With left padding, the last token is always at position -1
+            logits_last = outputs.logits[:, -1, :]  # [B, V]
+            logp_all = F.log_softmax(logits_last, dim=-1)  # [B, V]
 
 
-        if inputs.get("chosen_ids") is not None: # ftpo path
             # --- unpack ----------------------------------------------------------------
             ch_ids  = inputs["chosen_ids"].to(device)       # [B,C]
             ch_mask = inputs["chosen_mask"].to(device)      # [B,C] bool
@@ -260,227 +247,140 @@ class FTPOTrainer(DPOTrainer):
 
 
             # ---------------------------------------------------------------------------
-            #  Weight rule
-            #     • margin = p(chosen) − p(rejected)
+            #  Weight rule (using logits)
+            #     • margin = logit(chosen) − logit(rejected)
             #     • if margin ≥ ε                → weight = 0
             #     • if margin ≤ −ε or large loss → weight = 1
             #     • otherwise                    → linear taper  (ε − margin) / ε
             # ---------------------------------------------------------------------------
             batch_rows = torch.arange(B, device=logp_all.device).unsqueeze(1)
             
-            if LOSS_CALC_MODE == "probs":
-                gathered      = logp_all[batch_rows, ch_ids]      # log-p
-                probs_good    = gathered.exp()
-                prob_bad      = logp_bad.unsqueeze(-1).exp()
-                margin        = probs_good - prob_bad                
-                weights = torch.clamp((clip_epsilon_probs - margin) / clip_epsilon_probs, 0.0, 1.0) * ch_mask
-            else:   # "logits"
-                gathered      = logits_last[batch_rows, ch_ids]   # raw logits
-                logit_bad     = logits_last.gather(-1, rejected.unsqueeze(-1))
-                margin        = gathered - logit_bad
-                # need probs_good for the weighted mean later
-                logZ          = logits_last.logsumexp(-1, keepdim=True)
-                probs_good    = (gathered - logZ).exp()
-                weights = torch.clamp((clip_epsilon_logits - margin) / clip_epsilon_logits, 0.0, 1.0) * ch_mask
-
-            
+            gathered      = logits_last[batch_rows, ch_ids]   # raw logits
+            logit_bad     = logits_last.gather(-1, rejected.unsqueeze(-1))
+            margin        = gathered - logit_bad
+            # need probs_good for the weighted mean later
+            logZ          = logits_last.logsumexp(-1, keepdim=True)
+            weights = torch.clamp((clip_epsilon_logits - margin) / clip_epsilon_logits, 0.0, 1.0) * ch_mask
 
             # fall-back: if *all* weights in a row are zero, keep every chosen token
             zero_row = weights.sum(dim=-1, keepdim=True) < 1e-12
             weights  = torch.where(zero_row, ch_mask.float(), weights)
 
             # ---------------------------------------------------------------------------
-            #  Per-token preference loss (ftpo) – honours "probs" vs "logits"
+            #  Per-token preference loss (ftpo) – using logits
             # ---------------------------------------------------------------------------
             weights_sum = weights.sum(dim=-1, keepdim=True)               # [B,1]
             batch_rows  = torch.arange(B, device=ids.device).unsqueeze(1)
 
-            if LOSS_CALC_MODE == "probs":
-                logp_chosen = logp_all.gather(-1, ch_ids)                 # [B,C]
-                logp_bad    = logp_all.gather(-1, rejected.unsqueeze(-1))      # [B,1]
-                delta_tok   = logp_chosen - logp_bad                      # [B,C]
-            else:  # "logits" – completely localised, no softmax in loss
-                l_chosen    = logits_last[batch_rows, ch_ids]             # [B,C]
-                l_bad       = logits_last.gather(-1, rejected.unsqueeze(-1))   # [B,1]
-                delta_tok   = l_chosen - l_bad                            # [B,C]
+            # "logits" mode – completely localised, no softmax in loss
+            l_chosen    = logits_last[batch_rows, ch_ids]             # [B,C]
+            l_bad       = logits_last.gather(-1, rejected.unsqueeze(-1))   # [B,1]
+            delta_tok   = l_chosen - l_bad                            # [B,C]
 
-            if mode == "clip":
-                # soft hinge on raw Δ, margin = eps
-                margin  = clip_epsilon_logits if LOSS_CALC_MODE == "logits" else clip_epsilon_probs
-                tau     = 1.0        # smaller = sharper hinge
-                gap     = margin - delta_tok          # want gap ≤ 0
-                per_tok_loss = F.softplus(gap / tau)  # smooth, 0 when Δ ≥ margin
-            else:  # "free"
-                per_tok_loss = -F.logsigmoid(beta * delta_tok)
+            # "clip" mode loss
+            # soft hinge on raw Δ, margin = eps
+            margin  = clip_epsilon_logits
+            tau     = 1.0        # smaller = sharper hinge
+            gap     = margin - delta_tok          # want gap ≤ 0
+            per_tok_loss = F.softplus(gap / tau)  # smooth, 0 when Δ ≥ margin
 
             pref_loss = (per_tok_loss * weights).sum() / weights_sum.sum()   # ← scalar
 
+            extra_metrics = {}
 
-        else:
-            # single-token path
-            chosen = inputs["chosen_token_id"].to(device)
-            rejected = inputs["rejected_token_id"].to(device)
-            logp_good = logp_all.gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
-            logp_bad = logp_all.gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
-
-
-        # ───────────────────────────────────────────────────────────────────
-        #  Variant-specific preference term (single-token ftpo)
-        # ───────────────────────────────────────────────────────────────────
-        if inputs.get("chosen_ids") is None:
-            if LOSS_CALC_MODE == "probs":
-                delta = logp_good - logp_bad
-            else:  # "logits"
-                l_good = logits_last.gather(-1, chosen.unsqueeze(-1)).squeeze(-1)
-                l_bad  = logits_last.gather(-1, rejected.unsqueeze(-1)).squeeze(-1)
-                delta  = l_good - l_bad
-
-            if mode == "clip":
-                eps    = clip_epsilon_logits if LOSS_CALC_MODE == "logits" else clip_epsilon_probs
-                ratio  = torch.exp(delta)
-                clipped = torch.minimum(ratio,
-                                        torch.tensor(1.0 + eps, device=ratio.device))
-                pref_loss = -torch.log(clipped / (1.0 + eps)).mean()
-            else:  # "free"
-                pref_loss = -F.logsigmoid(beta * delta).mean()
-
-
-        extra_metrics = {}
-
-        # ── total loss & metrics ------------------------------------------
-        if USE_KL_LOSS:
-            # --------------------------------------------------------------
-            # 1. reference logits (no-grad)
-            # --------------------------------------------------------------
-            with torch.no_grad():
-                if self.ref_model is None:
-                    with self.null_ref_context():
-                        ref_logits_last = model(
+            # ── total loss & metrics ------------------------------------------
+            if USE_MSE_LOSS:
+                # --------------------------------------------------------------
+                # 1. reference logits (no-grad)
+                # --------------------------------------------------------------
+                with torch.no_grad():
+                    if self.ref_model is None:
+                        with self.null_ref_context():
+                            ref_logits_last = model(
+                                ids, attention_mask=attn, position_ids=pos_full,
+                                use_cache=False, return_dict=True,
+                            ).logits[:, -1, :]
+                    else:
+                        ref_logits_last = self.ref_model(
                             ids, attention_mask=attn, position_ids=pos_full,
                             use_cache=False, return_dict=True,
                         ).logits[:, -1, :]
-                else:
-                    ref_logits_last = self.ref_model(
-                        ids, attention_mask=attn, position_ids=pos_full,
-                        use_cache=False, return_dict=True,
-                    ).logits[:, -1, :]
 
-            # --------------------------------------------------------------
-            # 2. element-wise KL on *non-target* vocab  (old behaviour)
-            # --------------------------------------------------------------
-            freeze_mask = torch.ones_like(logits_last, dtype=torch.bool)
-            if "chosen_ids" in inputs:               # ftpo
+                # --------------------------------------------------------------
+                # 2. element-wise mse on *non-target* vocab (using logits)
+                # --------------------------------------------------------------
+                freeze_mask = torch.ones_like(logits_last, dtype=torch.bool)
                 rows = torch.arange(B, device=ch_ids.device).unsqueeze(1).expand_as(ch_ids)
                 freeze_mask[rows[ch_mask], ch_ids[ch_mask]] = False
-            else:                                    # single-token
-                freeze_mask.scatter_(1, chosen.unsqueeze(-1), False)
 
-            freeze_mask.scatter_(1, rejected.unsqueeze(-1), False)
 
-            if LOSS_CALC_MODE == "logits":
+                freeze_mask.scatter_(1, rejected.unsqueeze(-1), False)
+
                 diff        = logits_last - ref_logits_last
-                kl_elem_raw = (freeze_mask * diff.pow(2)).sum() / freeze_mask.sum()
-            else:
-                ref_lp      = F.log_softmax(ref_logits_last, dim=-1)
-                cur_lp      = F.log_softmax(logits_last,      dim=-1)
-                kl_elem_raw = (freeze_mask * ref_lp.exp() * (ref_lp - cur_lp)).sum()
-                kl_elem_raw = kl_elem_raw / freeze_mask.sum()
+                mse_elem_raw = (freeze_mask * diff.pow(2)).sum() / freeze_mask.sum()
 
-            # --------------------------------------------------------------
-            # 3. *Optional* aggregate KL on the target tokens only
-            #       This pulls target token logits towards basline
-            #       but only *on aggregate* so they can still move
-            #       independently of one another.
-            # --------------------------------------------------------------            
-            tgt_mask = torch.zeros_like(logits_last, dtype=torch.bool)
-            if "chosen_ids" in inputs:
+                # --------------------------------------------------------------
+                # 3. *Optional* aggregate mse on the target tokens only
+                #       This pulls target token logits towards basline
+                #       but only *on aggregate* so they can still move
+                #       independently of one another.
+                # --------------------------------------------------------------            
+                tgt_mask = torch.zeros_like(logits_last, dtype=torch.bool)
                 rows = torch.arange(B, device=ch_ids.device).unsqueeze(1).expand_as(ch_ids)
                 tgt_mask[rows[ch_mask], ch_ids[ch_mask]] = True
-            else:
-                tgt_mask.scatter_(1, chosen.unsqueeze(-1), True)
-            tgt_mask.scatter_(1, rejected.unsqueeze(-1), True)
-            
-            if lambda_kl_target_aggregate:
-                tgt_sz      = tgt_mask.sum(-1).clamp(min=1)        # avoid /0
-                mean_cur    = (logits_last * tgt_mask).sum(-1) / tgt_sz
-                mean_ref    = (ref_logits_last * tgt_mask).sum(-1) / tgt_sz
 
-                # give the target logits some grace to move around before kl penalty kicks in                
-                diff = mean_cur - mean_ref                      # [B]
-                excess = torch.clamp(diff.abs() - tau_kl_target_aggregate, min=0.0) # zero inside ±tau
-                kl_target_aggregate_raw = excess.pow(2).mean()               # quadratic outside band
-
-            else:
-                kl_target_aggregate_raw  = logits_last.new_tensor(0.0)
-
-            # ── token-wise KL on {chosen ∪ rejected} ──────────────────────────────
-            #
-            # In probability-space when LOSS_CALC_MODE == "probs"; otherwise fall
-            # back to the original quadratic-logit version.
-            #
-            TAU_TW_PROBS    = 0.0      # ± log-prob band where KL = 0
-            LAMBDA_TW_PROBS = 0.35      # weight for the prob-space term
-
-            if LOSS_CALC_MODE == "probs":
-                # ----- build mask for the target positions ------------------------
-                tgt_mask = torch.zeros_like(logits_last, dtype=torch.bool)
-                if "chosen_ids" in inputs:                       # ftpo path
-                    rows = torch.arange(B, device=ch_ids.device).unsqueeze(1).expand_as(ch_ids)
-                    tgt_mask[rows[ch_mask], ch_ids[ch_mask]] = True
-                else:                                            # single-token path
-                    tgt_mask.scatter_(1, chosen.unsqueeze(-1), True)
                 tgt_mask.scatter_(1, rejected.unsqueeze(-1), True)
+                
+                if lambda_mse_target_aggregate:
+                    tgt_sz      = tgt_mask.sum(-1).clamp(min=1)        # avoid /0
+                    mean_cur    = (logits_last * tgt_mask).sum(-1) / tgt_sz
+                    mean_ref    = (ref_logits_last * tgt_mask).sum(-1) / tgt_sz
 
-                # ----- log-probs ---------------------------------------------------
-                cur_lp = F.log_softmax(logits_last,     dim=-1)  # [B, V]
-                ref_lp = F.log_softmax(ref_logits_last, dim=-1)
+                    # give the target logits some grace to move around before mse penalty kicks in                
+                    diff = mean_cur - mean_ref                      # [B]
+                    excess = torch.clamp(diff.abs() - tau_mse_target_aggregate, min=0.0) # zero inside ±tau
+                    mse_target_aggregate_raw = excess.pow(2).mean()               # quadratic outside band
 
-                # KL(ref‖cur) element-wise, masked
-                kl_elem = (ref_lp.exp() * (ref_lp - cur_lp)) * tgt_mask
+                else:
+                    mse_target_aggregate_raw  = logits_last.new_tensor(0.0)
 
-                # dead-zone: ignore differences inside ±τ in log-prob space
-                lp_gap  = (cur_lp - ref_lp).abs()
-                active  = lp_gap > TAU_TW_PROBS
-
-                kl_target_tokenwise_raw = (kl_elem * active).sum() / tgt_mask.sum()
-
-                # weight straight away so kl_loss combiner stays clean
-                kl_target_tokenwise = LAMBDA_TW_PROBS * kl_target_tokenwise_raw
-            else:
-                if lambda_kl_target_tokenwise:
+                # ── token-wise mse on {chosen ∪ rejected} ──────────────────────────────
+                #
+                # Using the quadratic-logit version.
+                #
+                if lambda_mse_target_tokenwise:
                     diff_tok = logits_last - ref_logits_last          # [B,V]
                     # keep only the target positions
                     diff_tok = diff_tok * tgt_mask
 
                     # epsilon-insensitive quadratic: 0 inside ±τ, (|x|-τ)^2 outside
-                    excess_tok = torch.clamp(diff_tok.abs() - tau_kl_target_tokenwise, min=0.0)
-                    kl_target_tokenwise_raw = (excess_tok.pow(2)).sum() / tgt_mask.sum()
+                    excess_tok = torch.clamp(diff_tok.abs() - tau_mse_target_tokenwise, min=0.0)
+                    mse_target_tokenwise_raw = (excess_tok.pow(2)).sum() / tgt_mask.sum()
                 else:
-                    kl_target_tokenwise_raw = logits_last.new_tensor(0.0)
+                    mse_target_tokenwise_raw = logits_last.new_tensor(0.0)
 
 
-            # --------------------------------------------------------------
-            # 4. combine
-            # --------------------------------------------------------------
-            kl_loss = (
-                lambda_kl         * kl_elem_raw   # non-target vocab
-                + lambda_kl_target_aggregate  * kl_target_aggregate_raw    # aggregate target
-                + lambda_kl_target_tokenwise   * kl_target_tokenwise_raw    # per-token target
-            )
-            loss    = pref_loss + kl_loss
+                # --------------------------------------------------------------
+                # 4. combine
+                # --------------------------------------------------------------
+                mse_loss = (
+                    lambda_mse         * mse_elem_raw   # non-target vocab
+                    + lambda_mse_target_aggregate  * mse_target_aggregate_raw    # aggregate target
+                    + lambda_mse_target_tokenwise   * mse_target_tokenwise_raw    # per-token target
+                )
+                loss    = pref_loss + mse_loss
 
-            # diagnostics
-            extra_metrics.update({
-                "kl_elem"        : kl_elem_raw.detach(),
-                "kl_tgt_agg"         : kl_target_aggregate_raw.detach(),
-                "kl_tgt_tokenwise"         : kl_target_tokenwise_raw.detach(),
-            })
+                # diagnostics
+                extra_metrics.update({
+                    "mse_elem"        : mse_elem_raw.detach(),
+                    "mse_tgt_agg"         : mse_target_aggregate_raw.detach(),
+                    "mse_tgt_tokenwise"         : mse_target_tokenwise_raw.detach(),
+                })
 
-        else:
-            loss = pref_loss
+            else:
+                loss = pref_loss
 
 
-        if inputs.get("chosen_ids") is not None:        # ftpo
             # log-probs for each chosen token, same shape as ch_ids
             lp_chosen = logp_all.gather(-1, ch_ids)               # [B,C]
             lp_bad    = logp_bad.unsqueeze(-1)                    # [B,1]
@@ -489,22 +389,18 @@ class FTPOTrainer(DPOTrainer):
             wins_tok  = (lp_chosen > lp_bad) & ch_mask            # [B,C] bool
             frac_win  = wins_tok.float().sum(-1) / ch_mask.sum(-1).clamp(min=1e-8)  # [B]
             choice_win = frac_win.mean().detach()                 # scalar
-        else:                                        # ftpo single
-            choice_win = (logp_good > logp_bad).float().mean().detach()        
+      
 
-        metrics = {
-            "pref_loss":  pref_loss.detach(),
-            "choice_win": choice_win,
-            **extra_metrics,
-        }
-        self.store_metrics(metrics, train_eval="train")
+            metrics = {
+                "pref_loss":  pref_loss.detach(),
+                "choice_win": choice_win,
+                **extra_metrics,
+            }
+            self.store_metrics(metrics, train_eval="train")
 
-        #self.log({f"train/{k}": (v if not torch.is_tensor(v) else v.cpu().float().item())
-        #  for k, v in extra_metrics.items()})
-
-        if return_outputs:
-            return loss, metrics
-        return loss
+            if return_outputs:
+                return loss, metrics
+            return loss
 
 
 
