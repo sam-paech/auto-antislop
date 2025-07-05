@@ -1,64 +1,40 @@
 # Auto-Antislop
 
-Auto-Antislop is an automated pipeline designed to iteratively refine text generation datasets and finetune language models to reduce "slop" – common, repetitive, or undesirable phrases and patterns often found in LLM outputs. It combines generation, analysis, and DPO/FTPO (Direct Preference Optimization / Final Token Preference Optimization) finetuning into a configurable workflow.
+Auto-Antislop is an automated pipeline which takes a model and does the following:
 
-The core idea is to:
-1.  Generate text using a base model.
-2.  Analyze this text against a human baseline and its own patterns to identify "slop."
-3.  Automatically create ban lists (n-grams, phrases, regex).
-4.  Re-generate text, this time actively preventing the generation of banned phrases/n-grams identified in the earlier step using antislop backtracking.
-5.  Optionally repeat analysis / antislop generation / ban list updates for several iterations.
-6.  Create a preference dataset constituting examples of the inference so far, plus a `rejected` continuation token and several `chosen` alternate continuation tokens.
-7.  Finetune the base model on this preference dataset using DPO or FTPO.
+1. Generates a baseline dataset on a set of prompts that you specify
+2. Identifies the model's slop (over-represented words, phrases & n-grams)
+3. Using [antislop-vllm](https://github.com/sam-paech/antislop-vllm) generates a preference dataset for fine-tuning
+4. Fine tunes the model on the generated preference dataset using a novel trainer (FTPO: final token preference optimisation)
 
-## 🌟 Key Features
-
-*   **Iterative Dataset Refinement:** Automatically runs multiple cycles of generation and analysis.
-*   **Comprehensive Slop Detection:**
-    *   N-gram frequency analysis (compared to a human baseline).
-    *   Over-represented word detection.
-    *   Slop phrase extraction (using the `slop-forensics` submodule).
-    *   Custom phrase and regex ban lists.
-*   **Dynamic Banning during Generation:** Leverages the `antislop-vllm` submodule to apply bans in real-time.
-*   **Automated Preference Dataset Creation:** Generates `chosen`/`rejected` pairs for DPO/FTPO.
-*   **Integrated DPO/FTPO Finetuning:**
-    *   Supports standard DPO and a custom "final-token DPO" (FTPO) for fine-grained preference on single token choices.
-    *   Optional Unsloth integration for faster training and reduced memory usage.
-    *   Automatic learning rate scaling.
-    *   Early stopping callbacks.
-*   **vLLM Management:** Can optionally start and stop a local vLLM server for generation.
-*   **Resumability:** Pipeline can be resumed from a specific iteration if interrupted.
-*   **Highly Configurable:** Most aspects are controlled via a central YAML configuration file.
-*   **Detailed Output & Metrics:** Saves analysis results, ban lists, and performance metrics for each iteration.
 
 ## ⚙️ How It Works (Pipeline Flow)
 
-1.  **(Optional) vLLM Server Management:** If `manage_vllm` is true, the script starts a vLLM server. If a server is already running on the configured port, or if `manage_vllm` is false, the script assumes an external vLLM server.
-2.  **Iteration Loop (`num_iterations` times):**
+1.  **vLLM Server Management:** If `manage_vllm` is true, the script starts a vLLM server. If a server is already running on the configured port, or if `manage_vllm` is false, the script assumes an external vLLM server.
+2.  **Antislop Iteration Loop (`num_iterations` times):**
     *   **Generation (Iter 0 - Baseline):**
-        *   The `antislop-vllm` script generates text from a source dataset (e.g., writing prompts) *without* any ban lists active. This forms the "rejected" data for DPO.
+        *   The `antislop-vllm` script generates text from a source dataset (e.g., writing prompts) *without* any ban lists active. This forms the baseline dataset.
     *   **Analysis (All Iterations):**
         *   The generated text is analyzed using tools from `slop-forensics` and custom analysis scripts:
             *   N-gram frequencies are compared against a human writing profile.
             *   Over-represented words are identified.
             *   Common "slop phrases" are extracted.
-        *   Metrics like lexical diversity (TTR, RTTR) and repetition scores are calculated.
     *   **Ban List Update (All Iterations):**
         *   Based on the analysis, n-gram and slop phrase ban lists are created or updated. User-supplied `extra_ngrams_to_ban`, `extra_slop_phrases_to_ban`, and `extra_regex_patterns` from the config are merged.
     *   **Generation (Iter 1+ - Anti-Slop):**
-        *   `antislop-vllm` generates text again, but this time it uses the accumulated ban lists (n-grams, slop phrases, regex) to guide generation away from undesirable content.
-        *   The output of the final iteration serves as the "chosen" data for DPO.
-3.  **DPO/FTPO Dataset Creation:**
+        *   `antislop-vllm` generates text again on the same prompts, but this time it uses the accumulated ban lists (n-grams, slop phrases, regex) to avoid slop.
+        *   While generating, preference pairs are produced each time a ban occurs, containing a *rejected* token and a number of coherent alternative *chosen* tokens, as well as the preceding context.
+3.  **FTPO Dataset Creation:**
     *   Pairs are created:
-        *   `prompt`: The original input prompt.
-        *   `chosen`: Generation from the *final* anti-slop iteration.
-        *   `rejected`: Generation from the *initial* baseline iteration (Iter 0).
-    *   For FTPO mode, a specialized dataset is created focusing on single-token choices where the model was guided away from a "bad" token.
-4.  **(Optional) DPO/FTPO Finetuning:**
-    *   If `finetune_enabled` is true, the script runs DPO or FTPO finetuning using the preference dataset.
-    *   Supports LoRA and optional 4-bit quantization (QLoRA via Unsloth or bitsandbytes).
+        *   `prompt`: The original input prompt + generated context so far.
+        *   `rejected`: The first token in a banned sequence, at the time a ban occurred during antislop generation.
+        *   `chosen`: A number of coherent alternative tokens at that position, constrained by min_p.
+4.  **FTPO Finetuning:**
+    *   If `finetune_enabled` is true, the script runs FTPO finetuning using the preference dataset.
+    *   Supports LoRA and optional 4-bit quantization
+    *   Supports unsloth or transformers/trl training paths (though some models may not work with both)
     *   Saves the LoRA adapters and optionally a merged 16-bit model.
-5.  **(Optional) vLLM Server Shutdown:** If the script started vLLM, it stops it.
+
 
 ## 🚀 Installation
 
@@ -97,42 +73,47 @@ The core idea is to:
 
 ## ⚙️ Configuration
 
-The primary configuration is done through a YAML file. Refer to the example provided: `auto_antislop_config.yaml`.
+The primary configuration is done through a YAML file. Refer to the examples provided in `configs/`.
 
-Key configuration sections:
+While the pipeline is ostensibly automatic end to end, there are a lot of options you can tweak in the config file, some of which are important for a successful result. Let's walk through some of them:
 
-*   **`experiment_base_dir`**: Base directory for all output runs.
-*   **`human_profile_path`**: Path to a JSON file containing statistics about human writing (used as a baseline for n-gram analysis).
-*   **`log_level`**: Logging verbosity for the script.
-*   **vLLM Management (`manage_vllm`, `vllm_model_id`, `vllm_port`, etc.):** Settings for the vLLM server if managed by the script.
-*   **Iterative Pipeline (`num_iterations`):** Number of generation/analysis cycles.
-*   **Generation Script Parameters (`generation_step_enabled`, `generation_api_base_url`, `generation_model_id`, `generation_max_prompts`, etc.):** Parameters passed to `antislop-vllm` for text generation.
-    *   `generation_prompt_template`: How to wrap prompts from the dataset.
-    *   `generation_force_backtrack`, `generation_invert_probs`: Advanced sampling controls in `antislop-vllm`.
-*   **N-Gram Analysis & Banning (`enable_ngram_ban`, `top_k_bigrams`, quotas, `extra_ngrams_to_ban`):** Controls for n-gram based slop detection.
-*   **Over-Represented Word Analysis (`compute_overrep_words`, quotas):** Controls for identifying and banning overused words.
-*   **Slop Phrase Banning (`enable_slop_phrase_ban`, quotas, `extra_slop_phrases_to_ban`):** Controls for phrase-based slop detection.
-*   **Regex Banning (`extra_regex_patterns`):** User-supplied regex patterns to ban.
-*   **Metrics (`min_word_len_for_analysis`, etc.):** Parameters for analysis.
-*   **Finetuning (`finetune_enabled`, `finetune_mode`, `finetune_base_model_id`, LoRA params, etc.):**
-    *   `finetune_mode`: "dpo" or "ftpo".
-    *   `finetune_use_unsloth`: Set to `true` to use Unsloth for finetuning.
-    *   `finetune_ftpo_dataset`: Optionally specify an existing FTPO dataset.
-    *   `finetune_cuda_visible_devices`: GPU mask specifically for the finetuning stage.
+#### VLLM & Antislop Generation Parameters
+
+*   **`model_id`**: The model you want to unslop. Can be a huggingface id or a local dir.
+*   **`vllm management`:**: The pipeline can launch vllm automatically with the settings you provide; alternatively you can provide an openai compatible endpoint.
+*   **`generation_threads`:** How many parallel threads to generate with (set according to your system specs; if in doubt try 30).
+*   **`generation_max_prompts`:** The number of prompts to generate a response for. Set to 50 for a quick test. Recommmended is 1000-2000 for good coverage.
+*   **`generation_hf_dataset_name`:** The huggingface dataset used to source prompts (expects sharegpt format). The kinds of prompts you use determines the slop that will be removed from the model in fine tuning.
+*   **`extra_slop_phrases_to_ban`:** Set your own slop list to ban. The strings you add here will be trained out of the model.
+
+#### Fine-Tuning Parameters
+
+*   **`finetune_use_unsloth`:** Supports unsloth or transformers/trl. Unsloth has lower vram usage but it doesn't work with all modesl in this pipeline.
+*   **`finetune_mode`:** Set to "ftpo" or "dpo". FTPO is our trainer implemented specifically for the preference dataset we generate in this pipeline. It's more surgical in training out the slop words without impacting the weights otherwise, compared to DPO.
+*   **`finetune_early_stopping_wins`:** This stops training when "chosen" tokens are preferred more than "rejected" tokens by this fraction. Early stopping is important to avoid overtraining. We find a good number is 0.8-0.85. Some models will degrade more easily than others, in which case you can try a lower stopping threshold.
+*   **`finetune_lora_r`:** FTPO works best with a high lora rank (128-256), likely much higher than you are used to. This is because we are trying to do surgical updates of weights, and a high rank means less collateral damage on unrelated weights. Feel free to experiment; ymmv.
+*   **`finetune_target_modules`:** The models we target in fine tuning seems to be model dependent in terms of what works best. Check out the training recipes in `configs/`, or try just `["lm_head"]` for a minimally invasive fine-tune.
+*   **`finetune_learning_rate`:** Set the learning rate manually.
+*   **`finetune_auto_learning_rate`:** OR use an automatic learning rate that adjusts to dataset size, batch size & lora rank. Adjustable via `finetune_auto_learning_rate_adjustment_scaling`.
+*   **`finetune_max_train_examples`:** The number of training examples. Suggest 8000-12000.
+
+#### FTPO Parameters
+
+These params control the final token preference optimisation trainer. The defaults are probably fine for a first pass. See below for a breakdown of FTPO and the configurable parameters.
 
 ## 🛠️ Usage
 
-1.  **Prepare Configuration:**
-    *   Copy `auto_antislop_config.yaml` (if it's an example) or create your own.
-    *   Modify it to suit your needs (model IDs, paths, desired number of iterations, etc.).
-    *   Ensure your `human_profile_path` points to a valid JSON file.
+### Quickstart:
 
-2.  **Run the Pipeline:**
-    ```bash
-    python main.py --config-file path/to/your_config.yaml
-    ```
+Once your .yaml is set up:
 
-3.  **Key Command-Line Arguments (override config settings):**
+```
+python main.py --config myconfig.yaml
+```
+
+### Commandline Args
+
+**Key Command-Line Arguments (override config settings):**
     *   `--config-file`: Path to the main YAML configuration file (default: `auto_antislop_config.yaml`).
     *   `--resume-from-dir`: Path to an existing experiment run directory to resume.
     *   `--log-level`: Set logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
@@ -146,7 +127,7 @@ Key configuration sections:
     *   `--finetune-mode [dpo/ftpo]`: Override finetuning mode.
     *   `--finetune-cuda-visible-devices "0,1"`: Set specific GPUs for finetuning.
 
-4.  **Resuming Runs:**
+**Resuming Runs:**
     If the pipeline is interrupted, you can resume it by providing the path to the experiment directory:
     ```bash
     python main.py --config-file path/to/your_config.yaml --resume-from-dir results/auto_antislop_runs/run_YYYYMMDD_HHMMSS
@@ -196,7 +177,7 @@ This script automatically searches for the most recent `merged_16bit` model in t
     *   Provides tools and algorithms for analyzing text to identify various types of "slop," including over-represented n-grams and common undesirable phrases.
 
 
-### 📖 FTPO explained
+### 📖 FTPO Explained
 
 FTPO (Final-Token Preference Optimisation) is a surgical preference optimisation training algorithm that constrains gradient updates to just a rejected/chosen *continuation token*, and avoids training on the preceding context. The intent is to push probability mass **away from the first token of a banned phrase (the *rejected* token)** and **toward one or more viable alternatives (the *chosen* tokens)** while leaving the rest of the model distribution largely intact.
 
