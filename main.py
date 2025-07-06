@@ -92,11 +92,11 @@ def main():
     
     # --- General Arguments ---
     parser.add_argument(
-        "--config-file", type=Path, default=Path("auto_antislop_config.yaml"),
+        "-c", "--config-file", type=Path, default=Path("auto_antislop_config.yaml"),
         help="Path to the main YAML configuration file."
     )
     parser.add_argument(
-        "--resume-from-dir", type=Path, default=None,
+        "-r", "--resume-from-dir", type=Path, default=None,
         help="Path to an existing experiment run directory to resume."
     )
     parser.add_argument(
