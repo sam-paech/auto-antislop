@@ -387,6 +387,17 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
 
         dpo_dataset_hf = Dataset.from_list(pairs)
 
+        # ── DEBUG: inspect a few prompt / chosen / rejected triples ──────────────
+        def _show_examples(ds, n=3):
+            for i, ex in enumerate(ds.select(range(n))):
+                print(f"\n── example {i} ──")
+                print("PROMPT:\n",   ex["prompt"])
+                print("CHOSEN:\n",   ex["chosen"])
+                print("REJECTED:\n", ex["rejected"])
+                print("-" * 40)
+
+        _show_examples(dpo_dataset_hf, n=3)
+
         # ------------------------------------------------------------
         # 3. Apply the *same* length filter & book-keeping as vanilla DPO
         # ------------------------------------------------------------
