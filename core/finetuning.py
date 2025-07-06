@@ -786,8 +786,16 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     # ------------------------------------------------------------------
 
     if config.get("finetune_early_stopping_wins", None):
+        # for ftpo
         dpo_trainer.add_callback(
             ThresholdStop("choice_win",
+                        threshold=config["finetune_early_stopping_wins"],
+                        higher_is_better=True)
+        )
+
+        # for dpo
+        dpo_trainer.add_callback(
+            ThresholdStop("rewards/accuracies",
                         threshold=config["finetune_early_stopping_wins"],
                         higher_is_better=True)
         )
