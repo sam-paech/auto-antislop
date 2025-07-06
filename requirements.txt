@@ -9,6 +9,8 @@ tiktoken
 wordfreq>=3.0
 regex
 flash-attn
+dotenv
+scipy
 
 # For vLLM (if managed by this script)
 # vllm # User should install this separately if managing vLLM manually or if specific version needed

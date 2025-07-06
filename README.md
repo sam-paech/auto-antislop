@@ -8,8 +8,7 @@ Auto-Antislop is an automated pipeline which takes a model and does the followin
 4. Fine tunes the model on the generated preference dataset using a novel trainer (FTPO: final token preference optimisation)
 
 
-<details>
-<summary><strong>📚 Table of Contents</strong></summary>
+<strong>📚 Table of Contents</strong>
 
 - [🚀 Installation](#-installation)
   - [Prerequisites](#prerequisites)
@@ -45,7 +44,6 @@ Auto-Antislop is an automated pipeline which takes a model and does the followin
 
 - [📜 Citation](#-citation)
 
-</details>
 
 
 
@@ -67,13 +65,15 @@ Auto-Antislop is an automated pipeline which takes a model and does the followin
     ```
 
 3.  **Install Dependencies:**
+
+    *Preferably do this in a venv! Unsloth likes to install its own required dep versions, including torch.*
+
     ```bash
     pip install -r requirements.txt
     ```
     *   **Note on vLLM & Torch:** `vllm` and `torch` are listed in `requirements.txt` but commented out. It's often best to install versions compatible with your specific CUDA setup.
         *   If you plan to use the `--manage-vllm` feature, install `vllm` (e.g., `pip install vllm`).
         *   Ensure PyTorch is installed with CUDA support (see [pytorch.org](https://pytorch.org/)).
-        *   Unsloth (for finetuning) will install its required torch version if not present or incompatible.
 
 4.  **NLTK Data:**
     The script will attempt to download necessary NLTK resources (`punkt`, `punkt_tab`, `stopwords`) on first run. If this fails due to network issues, you might need to download them manually:
@@ -82,6 +82,15 @@ Auto-Antislop is an automated pipeline which takes a model and does the followin
     nltk.download('punkt')
     nltk.download('punkt_tab') # For NLTK 3.9+
     nltk.download('stopwords')
+    ```
+
+5. **Troubleshooting:**
+    If you are getting import errors during the training step (after installing the dependencies in requirements.txt), one thing to try is building flash-attn from source. The current prebuilt wheels (flash-attn==2.8.0.post2) installed by pip are non-functional with torch 2.7. Install it from source like:
+
+    ```
+    pip uninstall -y flash-attn
+    pip install -U wheel ninja packaging cmake    
+    MAX_JOBS=12 pip install git+https://github.com/Dao-AILab/flash-attention.git@v2.8.0.post2#egg=flash_attn --no-build-isolation
     ```
 
 ## ⚙️ Configuration
@@ -105,7 +114,7 @@ While the pipeline is ostensibly automatic end to end, there are a lot of option
 *   **`finetune_mode`:** Set to "ftpo" or "dpo". FTPO is our trainer implemented specifically for the preference dataset we generate in this pipeline. It's more surgical in training out the slop words without impacting the weights otherwise, compared to DPO.
 *   **`finetune_early_stopping_wins`:** This stops training when "chosen" tokens are preferred more than "rejected" tokens by this fraction. Early stopping is important to avoid overtraining. We find a good number is 0.8-0.85. Some models will degrade more easily than others, in which case you can try a lower stopping threshold.
 *   **`finetune_lora_r`:** FTPO works best with a high lora rank (128-256), likely much higher than you are used to. This is because we are trying to do surgical updates of weights, and a high rank means less collateral damage on unrelated weights. Feel free to experiment; ymmv.
-*   **`finetune_target_modules`:** The models we target in fine tuning seems to be model dependent in terms of what works best. Check out the training recipes in `configs/`, or try just `["lm_head"]` for a minimally invasive fine-tune.
+*   **`finetune_target_modules`:** The modules we target in fine tuning seems to be model dependent in terms of what works best. Check out the training recipes in `configs/` for working examples, or try just `["lm_head"]` for a minimally invasive fine-tune.
 *   **`finetune_learning_rate`:** Set the learning rate manually.
 *   **`finetune_auto_learning_rate`:** OR use an automatic learning rate that adjusts to dataset size, batch size & lora rank. Adjustable via `finetune_auto_learning_rate_adjustment_scaling`.
 *   **`finetune_max_train_examples`:** The number of training examples. Suggest 8000-12000.
