@@ -365,18 +365,24 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         pad_id = tokenizer.pad_token_id
 
         for ex in ftpo_ds:
-            # de-pad the left-padded prompt
+            # ––– recover the left-padded prompt as text –––
             prompt_ids = [tid for tid in ex["prompt_ids"] if tid != pad_id]
-            prompt_txt = tokenizer.decode(prompt_ids,   skip_special_tokens=False)
+            prompt_txt = tokenizer.decode(prompt_ids, skip_special_tokens=False)
 
-            chosen_tok_txt   = tokenizer.decode([ex["chosen_ids"][0]],      skip_special_tokens=False)
-            rejected_tok_txt = tokenizer.decode([ex["rejected_token_id"]],  skip_special_tokens=False)
+            # ––– single-token continuations –––
+            chosen_txt   = tokenizer.decode(
+                [ex["chosen_ids"][0]], skip_special_tokens=False
+            )
+            rejected_txt = tokenizer.decode(
+                [ex["rejected_token_id"]], skip_special_tokens=False
+            )
 
-            # build the pair expected by TRL’s DPOTrainer
             pairs.append(
-                {"prompt": prompt_txt,
-                "chosen": prompt_txt + chosen_tok_txt,
-                "rejected": prompt_txt + rejected_tok_txt}
+                {
+                    "prompt":   prompt_txt,
+                    "chosen":   chosen_txt,     # continuation only!
+                    "rejected": rejected_txt,   # continuation only!
+                }
             )
 
         dpo_dataset_hf = Dataset.from_list(pairs)
