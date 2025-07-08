@@ -251,7 +251,6 @@ def load_and_prepare_dataset(config: dict, experiment_run_dir: Path, tokenizer: 
         )
 
         # 2) Convert to (prompt, chosen, rejected) triples — one per row
-        from datasets import Dataset
         pairs   = []
         pad_id  = tokenizer.pad_token_id
 
