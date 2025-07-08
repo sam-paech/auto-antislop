@@ -7,7 +7,11 @@ if TYPE_CHECKING:
     from transformers import TextStreamer
     from transformers import AutoModelForCausalLM
     from peft import PeftModel
-    from trl import DPOTrainer, DPOConfig
+    from trl import (
+        DPOTrainer, DPOConfig,
+        KTOTrainer, KTOConfig,
+        ORPOTrainer, ORPOConfig,
+    )
     from datasets import Dataset
     from unsloth.chat_templates import get_chat_template
     import torch # Keep torch as it might be used for GPU checks earlier if needed    
@@ -24,6 +28,8 @@ import math
 import json
 from utils.dataset_helpers import load_ftpo_multi_dataset
 from utils.model_helpers import fix_gemma3_checkpoint, detie_lm_head, prepare_gemma3_for_save
+# Import the new dataloader function
+from utils.trainer_dataloaders import load_and_prepare_dataset
 logger = logging.getLogger(__name__)
 
 def load_imports(use_unsloth):
@@ -38,7 +44,11 @@ def load_imports(use_unsloth):
         from transformers import AutoTokenizer, TextStreamer # Added TextStreamer for potential inference example
         from transformers import AutoModelForCausalLM
         from peft import PeftModel
-        from trl import DPOTrainer, DPOConfig
+        from trl import (
+            DPOTrainer, DPOConfig,
+            KTOTrainer, KTOConfig,
+            ORPOTrainer, ORPOConfig,
+        )
         from datasets import load_dataset        
         import torch
         from torch.utils.data import default_collate
@@ -46,6 +56,8 @@ def load_imports(use_unsloth):
         from torch.nn.utils.rnn import pad_sequence
         import os
         import transformers
+        
+
 
 
         # Make all imports available in the global scope        
@@ -55,6 +67,10 @@ def load_imports(use_unsloth):
         globals()['PeftModel'] = PeftModel
         globals()['DPOTrainer'] = DPOTrainer
         globals()['DPOConfig'] = DPOConfig
+        globals()['KTOTrainer']  = KTOTrainer
+        globals()['KTOConfig']   = KTOConfig
+        globals()['ORPOTrainer'] = ORPOTrainer
+        globals()['ORPOConfig']  = ORPOConfig
         globals()['load_dataset'] = load_dataset        
         globals()['torch'] = torch
         globals()['default_collate'] = default_collate
@@ -217,214 +233,15 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         logger.info("Set tokenizer.pad_token to tokenizer.eos_token.")
 
     
-    # ── Select dataset path according to finetune_mode ───────────────────
-    mode = config.get("finetune_mode", "ftpo").lower()   # expect "dpo" or "ftpo"
-    dataset_path = None
-    # --- Model and Tokenizer Setup ---    
-    max_seq_length = config['finetune_max_seq_length']
+    # ── Load and prepare dataset using the dedicated utility function ───
+    dpo_dataset_hf = load_and_prepare_dataset(
+        config=config,
+        experiment_run_dir=experiment_run_dir,
+        tokenizer=tokenizer
+    )
 
-    if mode == "dpo":
-        # full-sequence preference pairs: rejected is baseline; chosen is the generation made with antislop
-        dataset_path = experiment_run_dir / "dpo_pairs_dataset.jsonl"
-        if not dataset_path.is_file():
-            logger.error(f"DPO dataset not found at {dataset_path}")
-            return
-
-        dpo_dataset_hf = load_dataset(
-            "json",
-            data_files=str(dataset_path),
-            split="train"
-        )
-
-        # ----------------------------------------------------------
-        #   discard rows whose prompt+continuation would overflow
-        # ----------------------------------------------------------
-        def _within_len(example):
-            prompt_ids = tokenizer(example["prompt"],
-                                add_special_tokens=False).input_ids
-            chosen_ids = tokenizer(example["chosen"],
-                                add_special_tokens=False).input_ids
-            rejected_ids = tokenizer(example["rejected"],
-                                    add_special_tokens=False).input_ids
-            max_len = config['finetune_max_seq_length']
-            return (
-                len(prompt_ids) + len(chosen_ids) <= max_len
-                and
-                len(prompt_ids) + len(rejected_ids) <= max_len
-            )
-
-        before = len(dpo_dataset_hf)
-        dpo_dataset_hf = dpo_dataset_hf.filter(_within_len)
-        after  = len(dpo_dataset_hf)
-        logger.info(f"DPO length filter: kept {after}/{before} examples "
-                    f"(max_seq_len = {config['finetune_max_seq_length']})")
-
-        if after == 0:
-            raise ValueError("every DPO sample exceeded finetune_max_seq_length")
-
-
-        dpo_dataset_hf = dpo_dataset_hf.shuffle(seed=config.get("finetune_shuffle_seed", 3407))
-        max_train = config.get("finetune_max_train_examples")
-        if isinstance(max_train, int) and max_train > 0 and len(dpo_dataset_hf) > max_train:
-            dpo_dataset_hf = dpo_dataset_hf.select(range(max_train))
-            logger.info(f"Capped training dataset to {max_train} examples.")
-
-        # ── filter malformed rows (prompt / chosen / rejected missing) ──
-        req_cols = {"prompt", "chosen", "rejected"}
-        before_len = len(dpo_dataset_hf)
-        dpo_dataset_hf = dpo_dataset_hf.filter(
-            lambda x: all(col in x and x[col] for col in req_cols)
-        )
-        after_len = len(dpo_dataset_hf)
-        if after_len == 0:
-            logger.error("All rows in DPO dataset were filtered out. Check contents.")
-            return
-        if after_len < before_len:
-            logger.info(f"Filtered out {before_len - after_len} malformed rows; "
-                        f"{after_len} remain.")
-        logger.info(f"DPO dataset ready with {after_len} samples.")
-
-    elif mode == "ftpo":
-        if config.get("finetune_ftpo_dataset"):
-            dataset_path = Path(config["finetune_ftpo_dataset"])
-        else:
-            ftpo_files = sorted(experiment_run_dir.glob("iter_*_ftpo_pairs.jsonl"))
-            if not ftpo_files:
-                logger.error("No ftpo files found for ftpo.")
-                return
-            dataset_path = ftpo_files[-1]
-
-        # ------------------------------------------------------------------
-        # FTPO dataset with dual regularisation + built-in size cap
-        # ------------------------------------------------------------------
-        dpo_dataset_hf = load_ftpo_multi_dataset(
-            dataset_path,
-            tokenizer,
-            max_seq_len         = max_seq_length,
-            # balance *rejected* tokens
-            rejected_reg_strength = config.get("ftpo_sample_rejected_regularisation_strength", 0.8),
-            # balance *chosen* tokens
-            chosen_reg_strength   = config.get("ftpo_sample_chosen_regularisation_strength", 0.2),
-            # hard floor on |chosen|
-            min_chosen_tokens     = config.get("ftpo_sample_min_chosen_tokens", 3),
-            # overall training-set cap (used for per-token quotas too)
-            max_train_examples    = config.get("finetune_max_train_examples"),
-        )
-
-        # loader already returns a shuffled dataset; an extra shuffle is fine but optional
-        dpo_dataset_hf = dpo_dataset_hf.shuffle(seed=config.get("finetune_shuffle_seed", 3407))
-
-
-        
-        # ──────────────────────────────────────────────────────────────
-        # [DEBUG] Inspect last-5 prompt tokens + chosen / rejected token
-        #         –– prints up to 50 ftpo examples for a quick sanity check.
-        #         –– gated by new config flag `finetune_debug_ftpo_tokens`.
-        # ──────────────────────────────────────────────────────────────
-        if False:
-            sample_n = min(50, len(dpo_dataset_hf))
-            print(f"\n🔎 ftpo debug: showing {sample_n} examples "
-                "(last-5 prompt tokens, chosen ▸ rejected)\n")
-            for i, ex in enumerate(dpo_dataset_hf.select(range(sample_n))):
-                tail_prompt = tokenizer.convert_ids_to_tokens(ex["prompt_ids"][-5:])
-                chosen_tok  = tokenizer.convert_ids_to_tokens([ex["chosen_ids"][0]])[0]
-                rejected_tok = tokenizer.convert_ids_to_tokens([ex["rejected_token_id"]])[0]
-                tail_str = " ".join(tail_prompt)
-                print(f"{i:03d}: … {tail_str}  →  {chosen_tok} ▸ {rejected_tok}")
-            print("\n—— end ftpo debug ——\n")
-
-    elif mode in ("dpo_final_token", "dpo-final-token"):
-        # ------------------------------------------------------------
-        # 1. Build the raw dataset **exactly** the same way FTPO does
-        # ------------------------------------------------------------
-        if config.get("finetune_ftpo_dataset"):
-            dataset_path = Path(config["finetune_ftpo_dataset"])
-        else:
-            ftpo_files = sorted(experiment_run_dir.glob("iter_*_ftpo_pairs.jsonl"))
-            if not ftpo_files:
-                logger.error("No ftpo files found for dpo_final_token.")
-                return
-            dataset_path = ftpo_files[-1]
-
-        ftpo_ds = load_ftpo_multi_dataset(
-            dataset_path,
-            tokenizer,
-            max_seq_len                  = max_seq_length,
-            rejected_reg_strength        = config.get("ftpo_sample_rejected_regularisation_strength", 0.8),
-            chosen_reg_strength          = config.get("ftpo_sample_chosen_regularisation_strength", 0.2),
-            min_chosen_tokens            = config.get("ftpo_sample_min_chosen_tokens", 3),
-            max_train_examples           = config.get("finetune_max_train_examples"),
-        )
-
-        # ------------------------------------------------------------
-        # 2. Convert each row into a *single-token* DPO pair
-        # ------------------------------------------------------------
-        from datasets import Dataset
-
-        pairs = []
-        pad_id = tokenizer.pad_token_id
-
-        for ex in ftpo_ds:
-            # ––– recover the left-padded prompt as text –––
-            prompt_ids = [tid for tid in ex["prompt_ids"] if tid != pad_id]
-            prompt_txt = tokenizer.decode(prompt_ids, skip_special_tokens=False)
-
-            # ––– single-token continuations –––
-            chosen_txt   = tokenizer.decode(
-                [ex["chosen_ids"][0]], skip_special_tokens=False
-            )
-            rejected_txt = tokenizer.decode(
-                [ex["rejected_token_id"]], skip_special_tokens=False
-            )
-
-            pairs.append(
-                {
-                    "prompt":   prompt_txt,
-                    "chosen":   chosen_txt,     # continuation only!
-                    "rejected": rejected_txt,   # continuation only!
-                }
-            )
-
-        dpo_dataset_hf = Dataset.from_list(pairs)
-
-        # ── DEBUG: inspect a few prompt / chosen / rejected triples ──────────────
-        def _show_examples(ds, n=3):
-            for i, ex in enumerate(ds.select(range(n))):
-                print(f"\n── example {i} ──")
-                print("PROMPT:\n",   ex["prompt"])
-                print("CHOSEN:\n",   ex["chosen"])
-                print("REJECTED:\n", ex["rejected"])
-                print("-" * 40)
-
-        _show_examples(dpo_dataset_hf, n=3)
-
-        # ------------------------------------------------------------
-        # 3. Apply the *same* length filter & book-keeping as vanilla DPO
-        # ------------------------------------------------------------
-        def _within_len(example):
-            p = tokenizer(example["prompt"],  add_special_tokens=False).input_ids
-            c = tokenizer(example["chosen"],  add_special_tokens=False).input_ids
-            r = tokenizer(example["rejected"],add_special_tokens=False).input_ids
-            return len(p) + len(c) <= max_seq_length and len(p) + len(r) <= max_seq_length
-
-        before = len(dpo_dataset_hf)
-        dpo_dataset_hf = dpo_dataset_hf.filter(_within_len)
-        after  = len(dpo_dataset_hf)
-        logger.info(f"dpo_final_token length filter: kept {after}/{before} examples "
-                    f"(max_seq_len = {max_seq_length})")
-
-        if after == 0:
-            raise ValueError("every sample exceeded finetune_max_seq_length")
-
-        dpo_dataset_hf = dpo_dataset_hf.shuffle(seed=config.get("finetune_shuffle_seed", 3407))
-        max_train = config.get("finetune_max_train_examples")
-        if isinstance(max_train, int) and max_train > 0 and len(dpo_dataset_hf) > max_train:
-            dpo_dataset_hf = dpo_dataset_hf.select(range(max_train))
-            logger.info(f"Capped training dataset to {max_train} examples.")
-
-
-    else:
-        logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'ftpo'.")
+    if dpo_dataset_hf is None:
+        logger.error("Dataset loading and preparation failed. Aborting finetune.")
         return
     
         
@@ -435,7 +252,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         try:
             model, _ = FastLanguageModel.from_pretrained(
                 model_name=model_name,
-                max_seq_length=max_seq_length,
+                max_seq_length=config['finetune_max_seq_length'],
                 load_in_4bit=config['finetune_load_in_4bit'],
                 dtype=torch.bfloat16 if config['finetune_load_in_4bit'] and torch.cuda.is_bf16_supported() else None,
             )
@@ -499,7 +316,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             target_modules=config['finetune_target_modules'],
             use_gradient_checkpointing=config['finetune_gradient_checkpointing'],
             random_state=3407,
-            max_seq_length=max_seq_length,
+            max_seq_length=config['finetune_max_seq_length'],
         )
 
 
@@ -636,7 +453,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         analysis_dir = experiment_run_dir / "logprob_gap_analysis"
         analysis_dir.mkdir(exist_ok=True)
         
-        collate = lambda feats: _collate_ftpo(feats, pad_id, max_seq_length)
+        collate = lambda feats: _collate_ftpo(feats, pad_id, config['finetune_max_seq_length'])
 
 
         if True: # skip this check for now
@@ -721,7 +538,22 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         config["finetune_learning_rate"] = lr
         print(f"Auto‑scaled LR (N={N}, w={w:.3f}) = {lr:.3e}")
 
-    TrainerClass = FTPOTrainer if mode.lower() in ["ftpo"] else DPOTrainer
+    trainer_lookup = {
+        "ftpo":           FTPOTrainer,
+        "dpo":            DPOTrainer,
+        "dpo_final_token":DPOTrainer,
+        "orpo_final_token":ORPOTrainer,
+        "kto_final_token":KTOTrainer,
+    }
+    TrainerClass = trainer_lookup[config.get("finetune_mode", "ftpo").lower()]
+
+    config_lookup = {
+        DPOTrainer:  DPOConfig,
+        FTPOTrainer: DPOConfig,   # FTPO subclasses DPO → same config
+        ORPOTrainer: ORPOConfig,
+        KTOTrainer:  KTOConfig,
+    }
+    ConfigClass = config_lookup[TrainerClass]
 
     if use_unsloth:
         optimiser_str = "adamw_8bit"
@@ -738,7 +570,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
         ref_model=None,
         train_dataset=dpo_dataset_hf,
         **kw,
-        args=DPOConfig(
+        args=ConfigClass(
             per_device_train_batch_size=config['finetune_batch_size'],
             gradient_accumulation_steps=config['finetune_gradient_accumulation_steps'],
             warmup_ratio=config['finetune_warmup_ratio'],
@@ -748,8 +580,8 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             optim=optimiser_str,
             seed=42,
             output_dir=str(finetune_output_dir),
-            max_length=max_seq_length,
-            max_prompt_length=max_seq_length // 2,
+            max_length=config['finetune_max_seq_length'],
+            max_prompt_length=config['finetune_max_seq_length'] // 2,
             beta=config['finetune_beta'],
             weight_decay=config['finetune_weight_decay'],
             report_to="tensorboard", # Changed to tensorboard for local runs
@@ -765,7 +597,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
     # ------------------------------------------------------------------
     # Inject FTPO-specific h-params from config (if we’re in FTPO mode)
     # ------------------------------------------------------------------
-    if mode == "ftpo":
+    if config.get("finetune_mode", "ftpo").lower() == "ftpo":
         # names used inside FTPOTrainer.compute_loss
         _ftpo_keys = [
             "loss_mode",
@@ -950,7 +782,7 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             # Unsloth’s loader already knows about Gemma-3 / Mistral-3 configs
             base_fp16, _ = FastLanguageModel.from_pretrained(
                 model_name      = config["finetune_base_model_id"],
-                max_seq_length  = max_seq_length,      # same var used earlier
+                max_seq_length  = config['finetune_max_seq_length'],      # same var used earlier
                 load_in_4bit    = False,               # we want full-precision
                 dtype           = torch.float16,
                 device_map      = {"": "cpu"},
