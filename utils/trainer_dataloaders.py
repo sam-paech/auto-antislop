@@ -310,7 +310,7 @@ def load_and_prepare_dataset(config: dict, experiment_run_dir: Path, tokenizer: 
             max_train_examples        = config.get("finetune_max_train_examples"),
         )
 
-        # 2) Flatten into (prompt, completion, label) rows
+        # 2) Build one positive + one negative row per prompt
         rows   = []
         pad_id = tokenizer.pad_token_id
 
@@ -318,22 +318,29 @@ def load_and_prepare_dataset(config: dict, experiment_run_dir: Path, tokenizer: 
             prompt_ids = [tid for tid in ex["prompt_ids"] if tid != pad_id]
             prompt_txt = tokenizer.decode(prompt_ids, skip_special_tokens=False)
 
+            # ensure we have at least one chosen token
+            if not ex["chosen_ids"]:
+                continue
+
+            # positive example: **first** chosen token only
+            ch_txt = tokenizer.decode([ex["chosen_ids"][0]], skip_special_tokens=False)
+            rows.append({
+                "prompt":     prompt_txt,
+                "completion": ch_txt,
+                "label":      True,
+            })
+
             # negative example
             rej_txt = tokenizer.decode([ex["rejected_token_id"]], skip_special_tokens=False)
-            rows.append({"prompt": prompt_txt,
-                        "completion": rej_txt,
-                        "label": False})
-
-            # positive examples
-            for cid in ex["chosen_ids"]:
-                ch_txt = tokenizer.decode([cid], skip_special_tokens=False)
-                rows.append({"prompt": prompt_txt,
-                            "completion": ch_txt,
-                            "label": True})
+            rows.append({
+                "prompt":     prompt_txt,
+                "completion": rej_txt,
+                "label":      False,
+            })
 
         dpo_dataset_hf = Dataset.from_list(rows)
 
-        # 3) Length filter / shuffle / cap
+        # 3) Length filter
         def _within_len(ex):
             p = tokenizer(ex["prompt"],     add_special_tokens=False).input_ids
             c = tokenizer(ex["completion"], add_special_tokens=False).input_ids
@@ -343,11 +350,13 @@ def load_and_prepare_dataset(config: dict, experiment_run_dir: Path, tokenizer: 
         dpo_dataset_hf = dpo_dataset_hf.filter(_within_len)
         logger.info(f"kto_final_token length filter: kept {len(dpo_dataset_hf)}/{before} samples")
 
-        #dpo_dataset_hf = dpo_dataset_hf.shuffle(seed=config.get("finetune_shuffle_seed", 3407))
+        # 4) FIRST cap to max_train, THEN shuffle
         max_train = config.get("finetune_max_train_examples")
         if isinstance(max_train, int) and max_train > 0 and len(dpo_dataset_hf) > max_train:
             dpo_dataset_hf = dpo_dataset_hf.select(range(max_train))
             logger.info(f"Capped training dataset to {max_train} examples.")
+
+        dpo_dataset_hf = dpo_dataset_hf.shuffle(seed=config.get("finetune_shuffle_seed", 3407))
 
     else:
         logger.error(f"Unknown finetune_mode '{mode}'. Use 'dpo' or 'ftpo'.")
