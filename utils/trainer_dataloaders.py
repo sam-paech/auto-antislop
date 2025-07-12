@@ -218,8 +218,7 @@ def load_and_prepare_dataset(config: dict, experiment_run_dir: Path, tokenizer: 
 
         if after == 0:
             raise ValueError("every sample exceeded finetune_max_seq_length")
-
-        dpo_dataset_hf = dpo_dataset_hf.shuffle(seed=config.get("finetune_shuffle_seed", 3407))
+        
         max_train = config.get("finetune_max_train_examples")
         if isinstance(max_train, int) and max_train > 0 and len(dpo_dataset_hf) > max_train:
             dpo_dataset_hf = dpo_dataset_hf.select(range(max_train))
