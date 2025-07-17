@@ -312,6 +312,13 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
         if 'banned_slop_phrases_filename' not in config:
             config['banned_slop_phrases_filename'] = 'banned_slop_phrases.json'
         banned_slop_phrases_json_path = experiment_dir / config['banned_slop_phrases_filename']
+
+        # Ensure both ban-list files exist so we can always hand them to antislop-vllm,
+        # even if the associated banning feature is turned off.
+        for _p in (banned_ngrams_json_path, banned_slop_phrases_json_path):
+            if not _p.exists():
+                _p.write_text("[]", encoding="utf-8")        # write an empty JSON array
+
         
         # --- Regex Blocklist (user-supplied, written once if provided, used from iter 1+) ---
         # This file is created before the loop, but only passed to generation from iter 1.
@@ -419,9 +426,9 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
                 regex_file_for_generation: Optional[Path] = None
 
                 if iter_idx > 0: # Banning starts from iteration 1
-                    if config['enable_ngram_ban'] and banned_ngrams_json_path.exists():
+                    if banned_ngrams_json_path.exists():
                         ngram_file_for_generation = banned_ngrams_json_path
-                    if config['enable_slop_phrase_ban'] and banned_slop_phrases_json_path.exists():
+                    if banned_slop_phrases_json_path.exists():
                         slop_file_for_generation = banned_slop_phrases_json_path
                     if user_regex_blocklist_file and user_regex_blocklist_file.exists(): # User-defined regex
                         regex_file_for_generation = user_regex_blocklist_file
