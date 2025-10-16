@@ -5,31 +5,47 @@ import os
 import json
 import datetime
 from pathlib import Path
-import datetime # For pipeline duration
 import yaml
 from pathlib import PurePath   # base for PosixPath / WindowsPath
 
-# register once – covers Path, PosixPath, WindowsPath …
+# Register once – covers Path, PosixPath, WindowsPath …
 yaml.SafeDumper.add_multi_representer(
     PurePath,
     lambda dumper, value: dumper.represent_scalar(
         "tag:yaml.org,2002:str", str(value))
 )
 
-# ── make utils importable ────────────────────────────────────────────
+# ── Resolve project root and expose it on sys.path ─────────────────────────────
 ROOT_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT_DIR))          # so "utils" is on sys.path
+sys.path.insert(0, str(ROOT_DIR))  # so "utils" is on sys.path
 
-# ── guarantee NLTK data is present *before* any other project import ─
+# ── Hard fail early if required submodules are missing ─────────────────────────
+def _ensure_required_submodules():
+    required = ("slop-forensics", "antislop-vllm")
+    missing = [name for name in required if not (ROOT_DIR / name).is_dir()]
+    if missing:
+        msg = (
+            "Required git submodules are missing: "
+            + ", ".join(missing)
+            + "\n\nClone the repo with submodules:\n"
+            "  git clone --recurse-submodules <repo-url>\n\n"
+            "If you already cloned without submodules, run:\n"
+            "  git submodule update --init --recursive\n"
+        )
+        print("WARNING: " + msg, file=sys.stderr)
+        sys.exit(2)
+
+_ensure_required_submodules()
+
+# ── guarantee NLTK data is present *before* any other project import ───────────
 from utils.fs_helpers import ensure_core_nltk_resources
-ensure_core_nltk_resources()               # downloads punkt, punkt_tab, stopwords
+ensure_core_nltk_resources()  # downloads punkt, punkt_tab, stopwords
 
-
-# --- Add project directories to sys.path ---
+# --- Add project directories to sys.path --------------------------------------
 # This allows importing from core, utils, and submodules
 sys.path.insert(0, str(ROOT_DIR / "slop-forensics"))
-# antislop-vllm is called as a script, its path for direct import is not strictly needed
-# unless some of its utils were to be imported by auto-antislop (not the current plan).
+# antislop-vllm is called as a script, its path for direct import is not strictly
+# needed unless some of its utils were to be imported by auto-antislop.
 
 from utils.config_loader import load_pipeline_config, merge_config_with_cli_args
 from utils.fs_helpers import (
@@ -40,8 +56,8 @@ from utils.vllm_manager import start_vllm_server, stop_vllm_server, is_vllm_serv
 from core.orchestration import orchestrate_pipeline
 from core.finetuning import run_dpo_finetune
 
-# --- Basic Logging Setup -------------------------------------------------
-logging.basicConfig(               # root stays at WARNING
+# --- Basic Logging Setup -------------------------------------------------------
+logging.basicConfig(  # root stays at WARNING
     level=logging.WARNING,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
@@ -60,7 +76,8 @@ def str2bool(v):
         return False
     raise argparse.ArgumentTypeError("Boolean value expected.")
 
-# ── QUICK CHECK: are *all* generation files already complete? ───────────────
+
+# ── QUICK CHECK: are *all* generation files already complete? ──────────────────
 def _all_generations_done(cfg: dict, resume_dir: Path | None) -> bool:
     if not resume_dir or not resume_dir.is_dir():
         return False
@@ -89,7 +106,7 @@ def _all_generations_done(cfg: dict, resume_dir: Path | None) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="Auto-Antislop: Iterative dataset generation and DPO finetuning.")
-    
+
     # --- General Arguments ---
     parser.add_argument(
         "-c", "--config-file", type=Path, default=Path("auto_antislop_config.yaml"),
@@ -113,7 +130,7 @@ def main():
         const=True,                          # `--manage-vllm` ⇒ True
         default=None,                        # fall back to config
         help="true/false to let this script start/stop a local vLLM server "
-            "(default comes from config)."
+             "(default comes from config)."
     )
     vllm_group.add_argument("--vllm-port", type=int, default=None, help="Port for vLLM server. Overrides config.")
     vllm_group.add_argument("--vllm-model-id", type=str, default=None, help="Model ID for vLLM server. Overrides config.")
@@ -133,8 +150,7 @@ def main():
         nargs="?",
         const=True,
         default=None,
-        help="true/false to execute the generation step. "
-            "(default from config)."
+        help="true/false to execute the generation step. (default from config)."
     )
 
     # --- Finetuning Control ---
@@ -145,27 +161,24 @@ def main():
         nargs="?",
         const=True,
         default=None,
-        help="true/false to run DPO finetuning after the pipeline "
-            "(default from config)."
+        help="true/false to run DPO finetuning after the pipeline (default from config)."
     )
-
     finetune_group.add_argument("--finetune-base-model-id", type=str, default=None, help="Base model for DPO. Overrides config.")
     finetune_group.add_argument("--finetune-num-epochs", type=int, default=None, help="Number of epochs for DPO. Overrides config.")
-
     finetune_group.add_argument(
         "--finetune-mode",
         choices=["dpo", "ftpo"],
         default=None,
         help="dpo = vanilla DPO on full continuations (default); "
-            "ftpo = masked Tokenwise-DPO on partial generation pairs, only computing loss for the completion token."
+             "ftpo = masked Tokenwise-DPO on partial generation pairs, only computing loss for the completion token."
     )
     finetune_group.add_argument(
         "--finetune-ftpo-dataset",
         type=Path,
         default=None,
         help="(Optional) explicit path to a ftpo/last-token JSONL file. "
-            "If omitted and --finetune-mode is ftpo, the script will "
-            "pick the highest iter_*_ftpo_pairs.jsonl in the experiment dir."
+             "If omitted and --finetune-mode is ftpo, the script will "
+             "pick the highest iter_*_ftpo_pairs.jsonl in the experiment dir."
     )
     finetune_group.add_argument(
         "--finetune-cuda-visible-devices",
@@ -174,10 +187,9 @@ def main():
         help='Comma-separated GPU ids for the finetune stage only (e.g. "1,3").'
     )
 
-
     args = parser.parse_args()
 
-        # --- Load and Merge Configuration ---
+    # --- Load and Merge Configuration ---
     config = load_pipeline_config(args.config_file)
     config = merge_config_with_cli_args(config, args)
 
@@ -196,15 +208,10 @@ def main():
     logging.getLogger().setLevel(logging.WARNING)
     logger.info(f"Logging level for project set to: {config['log_level'].upper()}")
 
-
-
-
     # --- Ensure NLTK resources ---
-    # These are used by core.analysis
-    # --- Ensure *all* NLTK resources are present *before* anything else ---
     logger.info("Verifying / downloading required NLTK data …")
     ensure_core_nltk_resources()
-    
+
     # --- Ensure antislop-vllm config-example is copied (user convenience) ---
     antislop_vllm_dir = ROOT_DIR / "antislop-vllm"
     if antislop_vllm_dir.is_dir():
@@ -212,18 +219,16 @@ def main():
     else:
         logger.warning(f"antislop-vllm submodule directory not found at {antislop_vllm_dir}. Generation will likely fail.")
 
-
-    # --- vLLM Server Management --------------------------------------------------
+    # --- vLLM Server Management -------------------------------------------------
     vllm_server_proc = None
     should_manage_vllm = config.get('manage_vllm', True)
 
     # Fast-path: if every generation file is already finished, don’t even start vLLM
     if should_manage_vllm and _all_generations_done(config, args.resume_from_dir):
-        logger.info("✨ All generation files complete – skipping vLLM startup altogether.")
+        logger.info("All generation files complete – skipping vLLM startup altogether.")
         should_manage_vllm = False
         config['manage_vllm'] = False  # keep downstream logic consistent
 
-    
     if should_manage_vllm:
         if not is_vllm_server_alive(config['vllm_port']):
             logger.info("Attempting to start and manage vLLM server.")
@@ -237,21 +242,17 @@ def main():
                 dtype=config['vllm_dtype'],
                 vllm_extra_args=config.get('vllm_extra_args'),
                 extra_env=config.get('vllm_env'),
-                uvicorn_log_level="error",          # <-- cut vllm chatter
-                quiet_stdout=True,          # <-- discard server stream
+                uvicorn_log_level="error",   # cut vllm chatter
+                quiet_stdout=True,           # discard server stream
             )
-            if vllm_server_proc is None: # Failed to start
+            if vllm_server_proc is None:  # Failed to start
                 logger.error("Failed to start managed vLLM server. Exiting.")
                 sys.exit(1)
         else:
             logger.info(f"vLLM server already running on port {config['vllm_port']}. Script will not manage it.")
-            should_manage_vllm = False # Don't try to stop it later
+            should_manage_vllm = False  # Don't try to stop it later
     else:
         logger.info("vLLM server management is disabled by config/CLI.")
-        #if not is_vllm_server_alive(config['vllm_port']):
-        #    logger.warning(f"vLLM server management disabled, but no server found on port {config['vllm_port']}. "
-        #                   "The generation pipeline will likely fail. Please start a vLLM server manually.")
-
 
     # --- Main Pipeline ---
     pipeline_start_time = datetime.datetime.now()
@@ -260,13 +261,13 @@ def main():
         base_dir = Path(config['experiment_base_dir'])
         resume_dir_path = Path(config['resume_from_dir']) if config.get('resume_from_dir', None) else None
         experiment_run_dir = create_experiment_dir(base_dir, resume_dir_path)
-        
+
         # Pass the actual experiment_run_dir to orchestrate_pipeline
         config['current_experiment_run_dir'] = str(experiment_run_dir)
 
         # ---------- persist the exact config used for this run ----------
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        cfg_path  = experiment_run_dir / f"run_config_{timestamp}.yaml"
+        cfg_path = experiment_run_dir / f"run_config_{timestamp}.yaml"
         cfg_path.write_text(
             yaml.safe_dump(config, sort_keys=False, allow_unicode=True),
             encoding="utf-8"
@@ -294,15 +295,17 @@ def main():
             if should_manage_vllm and vllm_server_proc:
                 logger.info("Stopping managed vLLM server before finetuning.")
                 stop_vllm_server(vllm_server_proc)
-                vllm_server_proc = None          # prevent a second stop later
+                vllm_server_proc = None  # prevent a second stop later
 
             logger.info("Proceeding to finetuning.")
             finetune_start_time = datetime.datetime.now()
             try:
                 finetune_output_dir = experiment_run_dir / f"finetuned_model{config['finetune_output_dir_suffix']}"
                 if finetune_output_dir.exists():
-                    reply = input(f"⚠️  Finetune dir '{finetune_output_dir}' already exists. "
-                                "Delete & re-run finetune? [y/N]: ").strip().lower()
+                    reply = input(
+                        f"⚠️  Finetune dir '{finetune_output_dir}' already exists. "
+                        "Delete & re-run finetune? [y/N]: "
+                    ).strip().lower()
                     if reply != "y":
                         logger.info("Finetune stage skipped by user request.")
                         return
@@ -319,7 +322,7 @@ def main():
         else:
             logger.warning("Skipping finetuning as the main pipeline did not complete successfully or experiment directory is not set.")
     else:
-        logger.info("inetuning is disabled by config/CLI or due to pipeline issues.")
+        logger.info("Finetuning is disabled by config/CLI or due to pipeline issues.")
 
 
 if __name__ == "__main__":
