@@ -21,19 +21,31 @@ sys.path.insert(0, str(ROOT_DIR))  # so "utils" is on sys.path
 
 # ── Hard fail early if required submodules are missing ─────────────────────────
 def _ensure_required_submodules():
+    def _dir_nonempty(p: Path) -> bool:
+        try:
+            return p.is_dir() and any(p.iterdir())
+        except Exception:
+            return False
+
     required = ("slop-forensics", "antislop-vllm")
-    missing = [name for name in required if not (ROOT_DIR / name).is_dir()]
-    if missing:
+    missing_or_empty = []
+    for name in required:
+        path = ROOT_DIR / name
+        if not _dir_nonempty(path):
+            missing_or_empty.append(name)
+
+    if missing_or_empty:
         msg = (
-            "Required git submodules are missing: "
-            + ", ".join(missing)
+            "Required git submodules are missing or empty: "
+            + ", ".join(missing_or_empty)
             + "\n\nClone the repo with submodules:\n"
             "  git clone --recurse-submodules <repo-url>\n\n"
-            "If you already cloned without submodules, run:\n"
+            "If you already cloned without submodules, fix an existing clone:\n"
             "  git submodule update --init --recursive\n"
         )
         print("WARNING: " + msg, file=sys.stderr)
         sys.exit(2)
+
 
 _ensure_required_submodules()
 
