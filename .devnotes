@@ -1,0 +1,9 @@
+# updating submodules:
+
+git submodule update --remote --merge        # add the submodule path to update just one
+git add antislop-vllm  # 2.  Record the new SHA(s) in the parent repo
+git commit -m "Update submodule antislop-vllm to latest"
+
+# 2.  Record the new SHA(s) in the parent repo
+git add slop-forensics                        # or `git add path/to/others`
+git commit -m "Update submodule slop-forensics to latest"
