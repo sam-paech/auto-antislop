@@ -7,6 +7,7 @@ Auto-Antislop is an automated pipeline which takes a model and does the followin
 3. Using [antislop-vllm](https://github.com/sam-paech/antislop-vllm) generates a preference dataset for fine-tuning
 4. Fine tunes the model on the generated preference dataset using a novel trainer (FTPO: final token preference optimisation)
 
+Paper: [https://arxiv.org/abs/2510.15061](https://arxiv.org/abs/2510.15061)
 
 <strong>📚 Table of Contents</strong>
 
