@@ -190,8 +190,7 @@ class FTPOTrainer(DPOTrainer):
         return batch
 
     def compute_loss(self, model, inputs, return_outputs=False, **_):
-        # We use 2 separate MSE loss terms (aggregate removed):
-
+        # We use 2 separate MSE loss terms
         # 1. A lightly applied tokenwise MSE loss applied to only the target tokens
         lambda_mse_target   = getattr(self, "lambda_mse_target", 0.05)  # strength
         tau_mse_target      = getattr(self, "tau_mse_target", 1.0)      # grace region (zero cost movement)

@@ -10,29 +10,17 @@ Auto-Antislop is an automated pipeline which takes a model and does the followin
 
 <strong>📚 Table of Contents</strong>
 
+- [⚡ Quickstart](#-quickstart)
+
 - [🚀 Installation](#-installation)
-  - [Prerequisites](#prerequisites)
-  - [Clone the Repository (with submodules)](#clone-the-repository-with-submodules)
-  - [Install Dependencies](#install-dependencies)
-  - [NLTK Data](#nltk-data)
 
 - [⚙️ Configuration](#️-configuration)
-  - [VLLM & Antislop Generation Parameters](#vllm--antislop-generation-parameters)
-  - [Fine-Tuning Parameters](#fine-tuning-parameters)
-  - [FTPO Parameters](#ftpo-parameters)
 
 - [🛠️ Usage](#️-usage)
-  - [Quickstart](#quickstart)
-  - [Commandline Args](#commandline-args)
-  - [Resuming Runs](#resuming-runs)
 
 - [⚙️ How It Works (Pipeline Flow)](#️-how-it-works-pipeline-flow)
 
 - [📖 FTPO Explained](#-ftpo-explained)
-  - [How a training example is created in the Auto-Antislop pipeline](#how-a-training-example-is-created-in-the-auto-antislop-pipeline)
-  - [Loss formulation](#loss-formulation)
-  - [Which to choose: mse_target_tokenwise or mse_target_aggregate](#which-to-choose-mse_target_tokenwise-or-mse_target_aggregate)
-  - [FTPO Tunable hyper-parameters](#ftpo-tunable-hyper-parameters)
 
 - [📂 Output Structure](#-output-structure)
 
@@ -45,6 +33,19 @@ Auto-Antislop is an automated pipeline which takes a model and does the followin
 - [📜 Citation](#-citation)
 
 
+## ⚡ Quickstart
+
+```bash
+# creates a venv, installs auto-antislop and runs an end-to-end unslop of gemma-3-4b-it
+git clone https://github.com/sam-paech/auto-antislop.git --recurse
+conda create -n antislop python=3.11 -y
+conda activate antislop
+cd auto-antislop
+pip install "torch==2.8.*"
+pip install -r requirements.txt
+pip install vllm
+python main.py -c configs/gemma-3-4b-it.yaml
+```
 
 
 ## 🚀 Installation
@@ -111,12 +112,14 @@ While the pipeline is ostensibly automatic end to end, there are a lot of option
 #### Fine-Tuning Parameters
 
 *   **`finetune_use_unsloth`:** Supports unsloth or transformers/trl. Unsloth has lower vram usage but it doesn't work with all modesl in this pipeline.
-*   **`finetune_mode`:** Set to "ftpo" or "dpo". FTPO is our trainer implemented specifically for the preference dataset we generate in this pipeline. It's more surgical in training out the slop words without impacting the weights otherwise, compared to DPO.
-*   **`finetune_early_stopping_wins`:** This stops training when "chosen" tokens are preferred more than "rejected" tokens by this fraction. Early stopping is important to avoid overtraining. We find a good number is 0.8-0.85. Some models will degrade more easily than others, in which case you can try a lower stopping threshold.
-*   **`finetune_lora_r`:** FTPO works best with a high lora rank (128-256), likely much higher than you are used to. This is because we are trying to do surgical updates of weights, and a high rank means less collateral damage on unrelated weights. Feel free to experiment; ymmv.
+*   **`finetune_mode`:** Set to "ftpo", "dpo" or "dpo_final_token". FTPO is our trainer implemented specifically for the preference dataset we generate in this pipeline. It's more gentle in training out slop without causing model degradation, compared to DPO.
+*   **`finetune_early_stopping_wins`:** This stops training when "chosen" tokens are preferred more than "rejected" tokens by this fraction. Early stopping is important to avoid overtraining. We find a good number is 0.8-0.9. Some models will degrade more easily than others, in which case you can try a lower stopping threshold.
+*   **`finetune_lora_r`:** FTPO works best with a high lora rank (128-256), which may be higher than is commonly used. We find these high ranks allow for better accuracy with less degradation.
 *   **`finetune_target_modules`:** The modules we target in fine tuning seems to be model dependent in terms of what works best. Check out the training recipes in `configs/` for working examples, or try just `["lm_head"]` for a minimally invasive fine-tune.
+*   **`finetune_freeze_early_layers`:** Set "true" to freeze all layers during training except the last n. This keeps model behaviour close to reference and avoids degradation.
+*   **`finetune_n_layers_unfrozen`:** The number of late layers unfrozen during training (default 5).
 *   **`finetune_learning_rate`:** Set the learning rate manually.
-*   **`finetune_auto_learning_rate`:** OR use an automatic learning rate that adjusts to dataset size, batch size & lora rank. Adjustable via `finetune_auto_learning_rate_adjustment_scaling`.
+*   **`finetune_auto_learning_rate`:** Set "true" to use an automatic learning rate that adjusts to dataset size, batch size & lora rank. Adjustable via `finetune_auto_learning_rate_adjustment_scaling`.
 *   **`finetune_max_train_examples`:** The number of training examples. Suggest 8000-12000.
 
 #### FTPO Parameters
@@ -186,9 +189,7 @@ python main.py --config myconfig.yaml
 
 ### 📖 FTPO Explained
 
-FTPO (Final-Token Preference Optimisation) is a surgical preference optimisation training algorithm that constrains gradient updates to just a rejected/chosen *continuation token*, and avoids training on the preceding context. The intent is to push probability mass **away from the first token of a banned phrase (the *rejected* token)** and **toward one or more viable alternatives (the *chosen* tokens)** while leaving the rest of the model distribution largely intact.
-
-The loss function operates entirely in logit-space (in contrast to most preference optimisation trainers that use softmax), resulting in minimalist targeted weight updates.
+FTPO (Final-Token Preference Optimisation) is a preference optimisation training algorithm that constrains gradient updates to just a rejected/chosen *continuation token*, and avoids training on the preceding context. The intent is to push probability mass **away from the first token of a banned phrase (the *rejected* token)** and **toward one or more viable alternatives (the *chosen* tokens)** while leaving the rest of the model distribution largely intact.
 
 ---
 
@@ -223,15 +224,15 @@ Result: a single JSONL line contains the shared context plus one rejected token 
   This encourages the model to rank *every* chosen token above the rejected one.
   Once a chosen logit is beating rejected by a given margin, it no longer contributes to the loss. This helps to avoid unnecessarily moving the weights when chosen is already winning.
 
-**Three-term MSE regulariser.**
-  A key part of the loss function is the MSE loss which is split into three terms:
+**Two-part MSE regulariser.**
+  A key part of the loss function is the MSE loss which is split into two terms:
 
     * lambda_mse \* mse_non_target +
     * lambda_mse_target \* mse_target
 
   Where "target" refers to the chosen & rejected logits for a given training example, and non-target refers to the remaining vocab.
 
-  We use MSE loss in logit space rather than KL loss, because applying softmax as part of the loss function (like KL does) creates learning pressure on the whole vocab, when we are instead trying to do minimal targeted gradient updates.
+  We use MSE loss in logit space rather than KL loss, because applying softmax as part of the loss function (like KL does) creates learning pressure on the whole vocab, when we are instead trying to apply minimal, targeted gradient updates.
 
    * **mse_target**: This term applies tokenwise loss pressure on just the target tokens (rejected & chosen) to keep them close to the original weights. We apply this separately so that we can apply a weaker MSE loss to the target tokens, allowing them to move more freely than the remainder of the vocab. This is because the target tokens need to move significantly relative to one another, since the "rejected" token is typically highest prob by a large margin (that's why it's slop!). Generally you should enable *either* mse_target_tokenwise or mse_target_aggregate.
    * **lambda_mse_target**: The scaling strength applied to the mse_target_tokenwise term. Set to 0 in the config to disable this loss term.
@@ -241,10 +242,7 @@ Result: a single JSONL line contains the shared context plus one rejected token 
 **Tau parameters**
    There is also a `tau` parameter for each of the two *target* loss terms, which acts as penalty free range (in logits) within which logits can move relative to baseline without incurring loss. Setting tau to > 0 can be helpful when using mse_target_tokenwise, to allow the model to learn more easily and reach higher preference accuracies when training. A reasonable range is 0-1.5. Higher values may lead to degradation with some models.
 
-**Which to choose: mse_target_tokenwise or mse_target_aggregate**
-  You can use both loss terms together, but mse_target_tokenwise will tend dominate as it's a applied per-token, where the aggregate term allows logits to move significantly before it kicks in.
-  Some models can tolerate the more permissive mse_target_aggregate term without degrading; other models are more sensitive and need mse_target_tokenwise to keep logits closer to baseline.
-  Check in the `configs/` dir for training recipes for specific models that have worked.
+Check in the `configs/` dir for training recipes for specific models.
 
 #### FTPO Tunable hyper-parameters
 
@@ -332,18 +330,16 @@ This script automatically searches for the most recent `merged_16bit` model in t
 If you use Auto-Antislop or the concepts from the original `antislop-sampler` in your research, please consider citing:
 
 ```bibtex
-@misc{paech2024antislop,
-      title={AntiSlop Sampler},
-      author={Samuel J. Paech},
-      year={2024},
-      howpublished={\url{https://github.com/sam-paech/antislop-sampler}}
-}
-
-@misc{paech2024antislop,
-      title={Auto-Antislop},
-      author={Samuel J. Paech},
-      year={2025},
-      howpublished={\url{https://github.com/sam-paech/auto-antislop}}
+@misc{paech2025antislop,
+  title         = {Antislop: A Comprehensive Framework for Identifying and Eliminating Repetitive Patterns in Language Models},
+  author        = {Paech, Samuel and Roush, Allen and Goldfeder, Judah and Shwartz-Ziv, Ravid},
+  year          = {2025},
+  month         = {oct},
+  eprint        = {2510.15061},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  doi           = {10.48550/arXiv.2510.15061},
+  url           = {https://arxiv.org/abs/2510.15061}
 }
 ```
 And/or link to this repository: `https://github.com/sam-paech/auto-antislop`

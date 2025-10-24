@@ -207,7 +207,7 @@ finetune_enabled: true
 
 # --- General Finetuning Setup ---
 finetune_use_unsloth: false
-finetune_mode: "ftpo" # dpo / ftpo (final token preference optimisation)
+finetune_mode: "ftpo" # ftpo / dpo / dpo_final_token
 finetune_ftpo_dataset: ""   # you can specify an existing ftpo dataset, or leave unset to let the 
                             # pipeline use the one produced in the generation step
 finetune_base_model_id: null # Base model for DPO (if unset, uses model_id)
