@@ -9,32 +9,32 @@ Auto-Antislop is an automated pipeline which takes a model and does the followin
 
 Paper: [https://arxiv.org/abs/2510.15061](https://arxiv.org/abs/2510.15061)
 
-<strong>📚 Table of Contents</strong>
+<strong>Table of Contents</strong>
 
-- [⚡ Quickstart](#-quickstart)
+- [Quickstart](#-quickstart)
 
-- [🚀 Installation](#-installation)
+- [Installation](#-installation)
 
-- [⚙️ Configuration](#️-configuration)
+- [Configuration](#-configuration)
 
-- [🛠️ Usage](#️-usage)
+- [Usage](#-usage)
 
-- [⚙️ How It Works (Pipeline Flow)](#️-how-it-works-pipeline-flow)
+- [How It Works (Pipeline Flow)](#-how-it-works-pipeline-flow)
 
-- [📖 FTPO Explained](#-ftpo-explained)
+- [FTPO Explained](#-ftpo-explained)
 
-- [📂 Output Structure](#-output-structure)
+- [Output Structure](#-output-structure)
 
-- [🧪 Post-Finetuning: Testing the Model](#-post-finetuning-testing-the-model)
+- [Post-Finetuning: Testing the Model](#-post-finetuning-testing-the-model)
 
-- [🧩 Submodules](#-submodules)
+- [Submodules](#-submodules)
 
-- [💡 Notes & Troubleshooting](#-notes--troubleshooting)
+- [Notes & Troubleshooting](#-notes--troubleshooting)
 
-- [📜 Citation](#-citation)
+- [Citation](#-citation)
 
 
-## ⚡ Quickstart
+## Quickstart
 
 ```bash
 # creates a venv, installs auto-antislop and runs an end-to-end unslop of gemma-3-4b-it
@@ -49,7 +49,7 @@ python main.py -c configs/gemma-3-4b-it.yaml
 ```
 
 
-## 🚀 Installation
+## Installation
 
 1.  **Prerequisites:**
     *   Python 3.9+
@@ -95,7 +95,7 @@ python main.py -c configs/gemma-3-4b-it.yaml
     MAX_JOBS=12 pip install git+https://github.com/Dao-AILab/flash-attention.git@v2.8.0.post2#egg=flash_attn --no-build-isolation
     ```
 
-## ⚙️ Configuration
+## Configuration
 
 The primary configuration is done through a YAML file. Refer to the examples provided in `configs/`.
 
@@ -127,7 +127,7 @@ While the pipeline is ostensibly automatic end to end, there are a lot of option
 
 These params control the final token preference optimisation trainer. The defaults are probably fine for a first pass. See below for a breakdown of FTPO and the configurable parameters.
 
-## 🛠️ Usage
+## Usage
 
 ### Quickstart:
 
@@ -161,7 +161,7 @@ python main.py --config myconfig.yaml
     The script will attempt to pick up from the last successfully completed part of the iteration. Generation for an iteration is considered complete if the output JSONL file exists and contains the expected number of `prompt_id`s.
 
 
-## ⚙️ How It Works (Pipeline Flow)
+## How It Works (Pipeline Flow)
 
 1.  **vLLM Server Management:** If `manage_vllm` is true, the script starts a vLLM server. If a server is already running on the configured port, or if `manage_vllm` is false, the script assumes an external vLLM server.
 2.  **Antislop Iteration Loop (`num_iterations` times):**
@@ -188,7 +188,7 @@ python main.py --config myconfig.yaml
     *   Supports unsloth or transformers/trl training paths (though some models may not work with both)
     *   Saves the LoRA adapters and optionally a merged 16-bit model.
 
-### 📖 FTPO Explained
+### FTPO Explained
 
 FTPO (Final-Token Preference Optimisation) is a preference optimisation training algorithm that constrains gradient updates to just a rejected/chosen *continuation token*, and avoids training on the preceding context. The intent is to push probability mass **away from the first token of a banned phrase (the *rejected* token)** and **toward one or more viable alternatives (the *chosen* tokens)** while leaving the rest of the model distribution largely intact.
 
@@ -264,7 +264,7 @@ ftpo_lambda_mse: 0.4
 ftpo_clip_epsilon_logits: 2     # For a chosen token: "after winning vs rejected token by this margin, preference loss turns off"
 ```
 
-## 📂 Output Structure
+## Output Structure
 
 Outputs are saved in `experiment_base_dir` (e.g., `results/auto_antislop_runs/`), under a timestamped directory for each run (e.g., `run_YYYYMMDD_HHMMSS/`):
 
@@ -289,7 +289,7 @@ Outputs are saved in `experiment_base_dir` (e.g., `results/auto_antislop_runs/`)
     *   `gguf_q8_0.gguf`: (If `finetune_save_gguf_q8_0: true`) GGUF quantized model.
     *   `logprob_gap_analysis/`: (If FTPO mode) JSONL files with pre/post training logprob gap statistics.
 
-## 🧪 Post-Finetuning: Testing the Model
+## Post-Finetuning: Testing the Model
 
 A simple script `test_inference.py` is provided to load the latest finetuned model and run a test generation.
 
@@ -298,7 +298,7 @@ python test_inference.py
 ```
 This script automatically searches for the most recent `merged_16bit` model in the standard output directories. You can modify the prompt within the script.
 
-##🧩 Submodules
+## Submodules
 
 *   **`antislop-vllm`**: (Path: `antislop-vllm/`)
     *   Handles the core text generation using vLLM.
@@ -316,7 +316,7 @@ This script automatically searches for the most recent `merged_16bit` model in t
 
 
 
-## 💡 Notes & Troubleshooting
+## Notes & Troubleshooting
 
 *   **GPU Memory:** Running vLLM and finetuning (especially with larger models) requires significant GPU VRAM. Adjust `vllm_gpu_memory_utilization` and finetuning batch sizes/quantization accordingly. If running both on the same GPU, the script attempts to stop vLLM before finetuning to free up VRAM.
 *   **Submodule Issues:** If you encounter errors related to `antislop-vllm` or `slop-forensics`, ensure the submodules are correctly initialized (`git submodule update --init --recursive`).
