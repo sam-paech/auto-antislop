@@ -318,7 +318,20 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
             if not _p.exists():
                 _p.write_text("[]", encoding="utf-8")        # write an empty JSON array
 
-        
+        # --- Merge user-defined bans from config (on initial run) ---
+        # This ensures extra_ngrams_to_ban and extra_slop_phrases_to_ban are included
+        # from the start, not just when resuming.
+        if not resume_mode:
+            if config['enable_ngram_ban'] and config.get('extra_ngrams_to_ban'):
+                merge_custom_bans_into_file(banned_ngrams_json_path,
+                                            config['extra_ngrams_to_ban'])
+                logger.info(f"📝 Merged {len(config['extra_ngrams_to_ban'])} user-defined n-grams into {banned_ngrams_json_path.name}")
+            if config['enable_slop_phrase_ban'] and config.get('extra_slop_phrases_to_ban'):
+                merge_custom_bans_into_file(banned_slop_phrases_json_path,
+                                            config['extra_slop_phrases_to_ban'])
+                logger.info(f"📝 Merged {len(config['extra_slop_phrases_to_ban'])} user-defined slop phrases into {banned_slop_phrases_json_path.name}")
+
+
         # --- Regex Blocklist (user-supplied, written once if provided, used from iter 1+) ---
         # This file is created before the loop, but only passed to generation from iter 1.
         user_regex_blocklist_file: Optional[Path] = None # Renamed for clarity
