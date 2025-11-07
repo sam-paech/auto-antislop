@@ -132,7 +132,7 @@ compute_overrep_words: true
 top_k_words_for_overrep_analysis: 200000
 
 # --- Quotas for Adding Over-represented Words to Slop Phrase Ban List ---
-dict_overrep_initial: 880       # How many of the top over-represented dictionary words to
+dict_overrep_initial: 2000       # How many of the top over-represented dictionary words to
                                 # ban in the first antislop iteration.
                                 # "Dictionary" means the words were also found in the human
                                 # writing corpus.

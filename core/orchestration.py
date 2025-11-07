@@ -318,18 +318,18 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
             if not _p.exists():
                 _p.write_text("[]", encoding="utf-8")        # write an empty JSON array
 
-        # --- Merge user-defined bans from config (on initial run) ---
+        # --- Merge user-defined bans from config (always, not just on initial run) ---
         # This ensures extra_ngrams_to_ban and extra_slop_phrases_to_ban are included
-        # from the start, not just when resuming.
-        if not resume_mode:
-            if config['enable_ngram_ban'] and config.get('extra_ngrams_to_ban'):
-                merge_custom_bans_into_file(banned_ngrams_json_path,
-                                            config['extra_ngrams_to_ban'])
-                logger.info(f"📝 Merged {len(config['extra_ngrams_to_ban'])} user-defined n-grams into {banned_ngrams_json_path.name}")
-            if config['enable_slop_phrase_ban'] and config.get('extra_slop_phrases_to_ban'):
-                merge_custom_bans_into_file(banned_slop_phrases_json_path,
-                                            config['extra_slop_phrases_to_ban'])
-                logger.info(f"📝 Merged {len(config['extra_slop_phrases_to_ban'])} user-defined slop phrases into {banned_slop_phrases_json_path.name}")
+        # before any iteration starts, regardless of resume mode.
+        # This is idempotent since merge_custom_bans_into_file uses set union.
+        if config['enable_ngram_ban'] and config.get('extra_ngrams_to_ban'):
+            merge_custom_bans_into_file(banned_ngrams_json_path,
+                                        config['extra_ngrams_to_ban'])
+            logger.info(f"📝 Merged {len(config['extra_ngrams_to_ban'])} user-defined n-grams into {banned_ngrams_json_path.name}")
+        if config['enable_slop_phrase_ban'] and config.get('extra_slop_phrases_to_ban'):
+            merge_custom_bans_into_file(banned_slop_phrases_json_path,
+                                        config['extra_slop_phrases_to_ban'])
+            logger.info(f"📝 Merged {len(config['extra_slop_phrases_to_ban'])} user-defined slop phrases into {banned_slop_phrases_json_path.name}")
 
 
         # --- Regex Blocklist (user-supplied, written once if provided, used from iter 1+) ---
@@ -445,16 +445,6 @@ def orchestrate_pipeline(config: Dict[str, Any], experiment_dir: Path, resume_mo
                     if user_regex_blocklist_file and user_regex_blocklist_file.exists(): # User-defined regex
                         regex_file_for_generation = user_regex_blocklist_file
 
-                    # If we are resuming and this is the first iteration after the resume,
-                    # force-merge any new YAML bans into the existing files *before* generation.
-                    if resume_mode and iter_idx == start_iter_idx:
-                        if config['enable_ngram_ban'] and config.get('extra_ngrams_to_ban'):
-                            merge_custom_bans_into_file(banned_ngrams_json_path,
-                                                        config['extra_ngrams_to_ban'])
-                        if config['enable_slop_phrase_ban'] and config.get('extra_slop_phrases_to_ban'):
-                            merge_custom_bans_into_file(banned_slop_phrases_json_path,
-                                                        config['extra_slop_phrases_to_ban'])
-                            
                     _copy_if_exists(ngram_file_for_generation,
                                     iter_analysis_dir / "banned_ngrams_used.json")
                     _copy_if_exists(slop_file_for_generation,

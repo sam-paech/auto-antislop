@@ -223,6 +223,9 @@ def update_banned_slop_phrases(
         except Exception:
             pass
 
+    # Track original size for logging
+    original_size = len(existing)
+
     # keep requested quota only
     cand_phrases = cand_phrases[:how_many_new]
     if over_represented_words:
@@ -230,10 +233,15 @@ def update_banned_slop_phrases(
             if w not in whitelist:
                 existing.add(w)
 
+    # Re-add extra_slop_phrases_to_ban from config (matches behavior of update_banned_ngrams_list)
+    for phrase in config.get('extra_slop_phrases_to_ban', []):
+        if phrase and not is_whitelisted(phrase):
+            existing.add(phrase)
+
     merged = sorted((existing | set(cand_phrases)) - whitelist)
     json_path.write_text(json.dumps([[p, 1] for p in merged], indent=2, ensure_ascii=False), "utf-8")
     logger.info(f"🚫 Slop-phrase ban list now {len(merged)} entries "
-                f"(+{len(merged)-len(existing)} this iter)")
+                f"(+{len(merged)-original_size} this iter)")
 
 
 # --- N-Gram Analysis ---
