@@ -209,7 +209,7 @@ class FTPOTrainer(DPOTrainer):
         attn  = inputs["attention_mask"].to(device)           # [B,L]
         B, L  = ids.shape
         
-        seq_len  = attn.sum(1)                         
+        seq_len  = attn.sum(1)
         pad_off  = (L - seq_len).unsqueeze(1)
         arange_L = torch.arange(L, device=ids.device).unsqueeze(0)
         pos_full = (arange_L - pad_off).clamp(min=0)
@@ -232,27 +232,24 @@ class FTPOTrainer(DPOTrainer):
         logp_bad = logp_all.gather(-1, rejected.unsqueeze(-1)).squeeze(-1)  
 
         batch_rows = torch.arange(B, device=logp_all.device).unsqueeze(1)
-        gathered      = logits_last[batch_rows, ch_ids]   
-        logit_bad     = logits_last.gather(-1, rejected.unsqueeze(-1))
-        margin        = gathered - logit_bad
-        weights = torch.clamp((clip_epsilon_logits - margin) / clip_epsilon_logits, 0.0, 1.0) * ch_mask
+        delta_tok = logits_last[batch_rows, ch_ids] - logits_last.gather(
+            -1, rejected.unsqueeze(-1)
+        )
+        weights = (
+            torch.clamp(
+                (clip_epsilon_logits - delta_tok) / clip_epsilon_logits,
+                0.0,
+                1.0,
+            )
+            * ch_mask
+        )
 
-        zero_row = weights.sum(dim=-1, keepdim=True) < 1e-12
-        weights  = torch.where(zero_row, ch_mask.float(), weights)
+        tau = 1.0
+        gap = clip_epsilon_logits - delta_tok
+        per_tok_loss = F.softplus(gap / tau)
 
-        weights_sum = weights.sum(dim=-1, keepdim=True)               
-        batch_rows  = torch.arange(B, device=ids.device).unsqueeze(1)
-
-        l_chosen    = logits_last[batch_rows, ch_ids]             
-        l_bad       = logits_last.gather(-1, rejected.unsqueeze(-1))   
-        delta_tok   = l_chosen - l_bad                            
-
-        margin  = clip_epsilon_logits
-        tau     = 1.0        
-        gap     = margin - delta_tok          
-        per_tok_loss = F.softplus(gap / tau)  
-
-        pref_loss = (per_tok_loss * weights).sum() / weights_sum.sum()   
+        chosen_counts = ch_mask.sum(dim=-1).clamp(min=1)
+        pref_loss = ((per_tok_loss * weights).sum(dim=-1) / chosen_counts).mean()
 
         extra_metrics = {}
 
@@ -270,13 +267,13 @@ class FTPOTrainer(DPOTrainer):
                         use_cache=False, return_dict=True,
                     ).logits[:, -1, :]
 
-            freeze_mask = torch.ones_like(logits_last, dtype=torch.bool)
+            tether_mask = torch.ones_like(logits_last, dtype=torch.bool)
             rows = torch.arange(B, device=ch_ids.device).unsqueeze(1).expand_as(ch_ids)
-            freeze_mask[rows[ch_mask], ch_ids[ch_mask]] = False
-            freeze_mask.scatter_(1, rejected.unsqueeze(-1), False)
+            tether_mask[rows[ch_mask], ch_ids[ch_mask]] = False
+            tether_mask.scatter_(1, rejected.unsqueeze(-1), False)
 
             diff        = logits_last - ref_logits_last
-            mse_elem_raw = (freeze_mask * diff.pow(2)).sum() / freeze_mask.sum()
+            mse_elem_raw = (tether_mask * diff.pow(2)).sum() / tether_mask.sum()
 
             tgt_mask = torch.zeros_like(logits_last, dtype=torch.bool)
             rows = torch.arange(B, device=ch_ids.device).unsqueeze(1).expand_as(ch_ids)
