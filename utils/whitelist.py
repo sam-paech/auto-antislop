@@ -75,7 +75,7 @@ class WhitelistBuilder:
             tokenizer.pad_token,
             tokenizer.cls_token,
             tokenizer.sep_token,
-            *(tokenizer.additional_special_tokens or []),
+            *(getattr(tokenizer, "additional_special_tokens", []) or []),
         ]
         for raw_text in special_token_texts:
             if not raw_text:
