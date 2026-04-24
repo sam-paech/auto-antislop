@@ -7,6 +7,30 @@ from safetensors.torch import safe_open, save_file
 
 log = logging.getLogger(__name__)
 
+
+def unwrap_clippable_linears(model) -> int:
+    """
+    Replace remote-code clippable linear wrappers with their underlying
+    torch.nn.Linear modules so vanilla PEFT can inject adapters.
+
+    Some Gemma loaders expose projection modules as Gemma*ClippableLinear
+    wrappers with the real Linear stored on `.linear`. PEFT's LoRA injection
+    only accepts the inner Linear type.
+    """
+    count = 0
+
+    for child_name, child in list(model.named_children()):
+        count += unwrap_clippable_linears(child)
+
+        inner = getattr(child, "linear", None)
+        if inner is None:
+            continue
+        if child.__class__.__name__.endswith("ClippableLinear"):
+            setattr(model, child_name, inner)
+            count += 1
+
+    return count
+
 def fix_gemma3_checkpoint(ckpt_dir: str | Path) -> None:
     """
     If `ckpt_dir` is a Gemma-3 checkpoint whose tensor keys look like

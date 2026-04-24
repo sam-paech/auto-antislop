@@ -29,7 +29,12 @@ import math
 import json
 from datetime import datetime, timezone
 from utils.dataset_helpers import load_ftpo_multi_dataset
-from utils.model_helpers import fix_gemma3_checkpoint, detie_lm_head, prepare_gemma3_for_save
+from utils.model_helpers import (
+    fix_gemma3_checkpoint,
+    detie_lm_head,
+    prepare_gemma3_for_save,
+    unwrap_clippable_linears,
+)
 # Import the new dataloader function
 from utils.trainer_dataloaders import load_and_prepare_dataset
 logger = logging.getLogger(__name__)
@@ -999,6 +1004,9 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
                 device_map  = {"": "cpu"},
                 trust_remote_code = True,
             )
+        unwrapped = unwrap_clippable_linears(base_fp16)
+        if unwrapped:
+            logger.info("Unwrapped %d clippable linear modules before PEFT merge.", unwrapped)
         model_fp16 = PeftModel.from_pretrained(
             base_fp16,
             lora_dir,                           # plug in the saved adapter

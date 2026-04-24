@@ -309,9 +309,23 @@ class FTPOTrainer(DPOTrainer):
         frac_win  = wins_tok.float().sum(-1) / ch_mask.sum(-1).clamp(min=1e-8)  
         chosen_win = frac_win.mean().detach()                 
 
+        active_delta = delta_tok[ch_mask]
+        active_weights = weights[ch_mask]
+        margin_win = (
+            ((delta_tok >= clip_epsilon_logits) & ch_mask).float().sum()
+            / ch_mask.float().sum().clamp(min=1e-8)
+        ).detach()
+        mean_delta = active_delta.mean().detach()
+        median_delta = active_delta.median().detach()
+        active_weight = active_weights.mean().detach()
+
         metrics = {
             "pref_loss":  pref_loss.detach(),
             "chosen_win": chosen_win,
+            "margin_win": margin_win,
+            "mean_delta": mean_delta,
+            "median_delta": median_delta,
+            "active_weight": active_weight,
             **extra_metrics,
         }
         self.store_metrics(metrics, train_eval="train")
