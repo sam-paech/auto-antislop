@@ -110,7 +110,7 @@ def load_and_prepare_dataset(config: dict, experiment_run_dir: Path, tokenizer: 
             # balance *rejected* tokens
             rejected_reg_strength = config.get("ftpo_sample_rejected_regularisation_strength", 0.8),
             # balance *chosen* tokens
-            chosen_reg_strength   = config.get("ftpo_sample_chosen_regularisation_strength", 0.2),
+            chosen_reg_strength   = config.get("ftpo_sample_chosen_regularisation_strength", 0.0),
             # hard floor on |chosen|
             min_chosen_tokens     = config.get("ftpo_sample_min_chosen_tokens", 3),
             # overall training-set cap (used for per-token quotas too)
@@ -158,7 +158,7 @@ def load_and_prepare_dataset(config: dict, experiment_run_dir: Path, tokenizer: 
             experiment_run_dir = experiment_run_dir,
             max_seq_len                  = max_seq_length,
             rejected_reg_strength        = config.get("ftpo_sample_rejected_regularisation_strength", 0.8),
-            chosen_reg_strength          = config.get("ftpo_sample_chosen_regularisation_strength", 0.2),
+            chosen_reg_strength          = config.get("ftpo_sample_chosen_regularisation_strength", 0.0),
             min_chosen_tokens            = config.get("ftpo_sample_min_chosen_tokens", 3),
             max_train_examples           = config.get("finetune_max_train_examples"),
         )
@@ -247,7 +247,7 @@ def load_and_prepare_dataset(config: dict, experiment_run_dir: Path, tokenizer: 
             experiment_run_dir = experiment_run_dir,
             max_seq_len               = max_seq_length,
             rejected_reg_strength     = config.get("ftpo_sample_rejected_regularisation_strength", 0.8),
-            chosen_reg_strength       = config.get("ftpo_sample_chosen_regularisation_strength", 0.2),
+            chosen_reg_strength       = config.get("ftpo_sample_chosen_regularisation_strength", 0.0),
             min_chosen_tokens         = config.get("ftpo_sample_min_chosen_tokens", 3),
             max_train_examples        = config.get("finetune_max_train_examples"),
         )
@@ -299,7 +299,7 @@ def load_and_prepare_dataset(config: dict, experiment_run_dir: Path, tokenizer: 
             experiment_run_dir = experiment_run_dir,
             max_seq_len               = max_seq_length,
             rejected_reg_strength     = config.get("ftpo_sample_rejected_regularisation_strength", 0.8),
-            chosen_reg_strength       = config.get("ftpo_sample_chosen_regularisation_strength", 0.2),
+            chosen_reg_strength       = config.get("ftpo_sample_chosen_regularisation_strength", 0.0),
             min_chosen_tokens         = config.get("ftpo_sample_min_chosen_tokens", 3),
             max_train_examples        = config.get("finetune_max_train_examples"),
         )

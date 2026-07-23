@@ -16,6 +16,82 @@ logger = logging.getLogger(__name__)
 _WATCH = [" nodded", " leaned"]
 
 
+def _chosen_target_quotas(
+    chosen_counts: Counter[str],
+    strength: float,
+) -> dict[str, int]:
+    """Return per-token occurrence caps for chosen-token regularisation."""
+    if not chosen_counts or strength <= 0:
+        return dict(chosen_counts)
+
+    # Prevent the largest outliers from dominating the distribution before
+    # applying the smoother median-threshold regularisation.
+    if len(chosen_counts) >= 10:
+        cap_value = sorted(chosen_counts.values(), reverse=True)[9]
+        capped = {
+            token: min(count, cap_value)
+            for token, count in chosen_counts.items()
+        }
+    else:
+        capped = dict(chosen_counts)
+
+    median = float(np.median(list(capped.values())))
+    return {
+        token: int(round(
+            count
+            if count <= median
+            else count * (median / count) ** strength
+        ))
+        for token, count in capped.items()
+    }
+
+
+def _trim_chosen_to_quotas(
+    rows: list[dict],
+    quotas: dict[str, int],
+    rng: np.random.Generator,
+) -> list[dict]:
+    """Uniformly retain chosen-token occurrences up to their global quotas."""
+    counts = Counter(
+        token
+        for row in rows
+        for token in (row.get("multi_chosen_decoded") or [])
+    )
+    if all(quotas.get(token, count) >= count for token, count in counts.items()):
+        return [dict(row) for row in rows]
+
+    # Randomise both row and slot traversal so quota allocation does not
+    # systematically favour early examples or a token's probability rank.
+    seen: Counter[str] = Counter()
+    trimmed: list[dict | None] = [None] * len(rows)
+    for row_idx_raw in rng.permutation(len(rows)):
+        row_idx = int(row_idx_raw)
+        row = rows[row_idx]
+        decoded = row.get("multi_chosen_decoded") or []
+        keep: set[int] = set()
+        for slot_idx_raw in rng.permutation(len(decoded)):
+            slot_idx = int(slot_idx_raw)
+            token = decoded[slot_idx]
+            if seen[token] < max(0, quotas.get(token, counts[token])):
+                keep.add(slot_idx)
+                seen[token] += 1
+
+        new_row = dict(row)
+        new_row["multi_chosen_decoded"] = [
+            token for slot_idx, token in enumerate(decoded) if slot_idx in keep
+        ]
+
+        raw = row.get("multi_chosen_raw")
+        if isinstance(raw, list) and len(raw) == len(decoded):
+            new_row["multi_chosen_raw"] = [
+                token for slot_idx, token in enumerate(raw) if slot_idx in keep
+            ]
+
+        trimmed[row_idx] = new_row
+
+    return [row for row in trimmed if row is not None]
+
+
 def load_ftpo_multi_dataset(
     path: Path,
     tokenizer,
@@ -108,24 +184,10 @@ def load_ftpo_multi_dataset(
 
     _log_top(chosen_cts_orig, "ORIGINAL CHOSEN TOKENS")
 
-    # Trim the peak: cap top tokens to match the 10th highest count
-    if len(chosen_cts_orig) >= 10:
-        top_counts = sorted(chosen_cts_orig.values(), reverse=True)
-        cap_value = top_counts[9]  # 10th highest count
-        chosen_cts_capped = Counter()
-        for tok, cnt in chosen_cts_orig.items():
-            chosen_cts_capped[tok] = min(cnt, cap_value)
-    else:
-        chosen_cts_capped = chosen_cts_orig.copy()
-
-    # Now calculate regularization on the capped distribution
-    med_chosen = float(np.median(list(chosen_cts_capped.values())))
-    w_chosen = {tok: 1.0 if c <= med_chosen
-            else (med_chosen / c) ** chosen_reg_strength
-            for tok, c in chosen_cts_capped.items()}
-
-    tgt_chosen = {tok: int(round(c * w_chosen.get(tok, 1.0)))
-                for tok, c in chosen_cts_capped.items()}
+    tgt_chosen = _chosen_target_quotas(
+        chosen_cts_orig,
+        chosen_reg_strength,
+    )
 
     # Log the target quotas
     quota_items = sorted(tgt_chosen.items(), key=lambda x: x[1], reverse=True)[:20]
@@ -137,7 +199,13 @@ def load_ftpo_multi_dataset(
         _WATCH[1], tgt_chosen.get(_WATCH[1], 0), chosen_cts_orig.get(_WATCH[1], 0),
     )
 
-    _log_top(Counter(r["rejected_decoded"] for r in rows), "POST-CHOSEN")
+    rows = _trim_chosen_to_quotas(rows, tgt_chosen, rng)
+    chosen_cts_trimmed = Counter(
+        token
+        for row in rows
+        for token in (row["multi_chosen_decoded"] or [])
+    )
+    _log_top(chosen_cts_trimmed, "POST-CHOSEN")
 
     # ────────────────────────────────────────────────────────────────
     # 3️⃣  Apply min_chosen_tokens row filter
@@ -205,6 +273,13 @@ def load_ftpo_multi_dataset(
             seen[best_tok] += 1
     
     rows = selected
+
+    final_chosen_counts = Counter(
+        token
+        for row in rows
+        for token in (row["multi_chosen_decoded"] or [])
+    )
+    _log_top(final_chosen_counts, "FINAL CHOSEN TOKENS")
 
     # ── Dump the final row subset exactly as it was read (no tokenisation) ──
     if experiment_run_dir is not None:
