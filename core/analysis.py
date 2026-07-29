@@ -156,10 +156,23 @@ def select_overrep_words_for_ban(dict_words: list[str],
     for w in dict_words:
         if len(selected) >= dict_q: break
         if w.lower() not in whitelist: selected.append(w)
+
+    n_dict = len(selected)
     for w in nodict_words:
-        if len(selected) >= dict_q + nodict_q: break
+        if len(selected) - n_dict >= nodict_q: break
         if w.lower() not in whitelist: selected.append(w)
-    logger.info(f"Selected {len(selected)} over-rep words for ban ({dict_q}/{nodict_q} quotas).")
+
+    n_nodict = len(selected) - n_dict
+    logger.info(
+        "Selected %d dict + %d non-dict over-rep words for ban "
+        "(quotas %d/%d; pools %d/%d).",
+        n_dict,
+        n_nodict,
+        dict_q,
+        nodict_q,
+        len(dict_words),
+        len(nodict_words),
+    )
     return selected
 
 
