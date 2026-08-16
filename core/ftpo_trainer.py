@@ -220,7 +220,7 @@ class FTPOTrainer(DPOTrainer):
             attention_mask=attn,
             position_ids=pos_full,
             use_cache=False,
-            return_dict=True,
+            return_dict=True, logits_to_keep=1,
         )
         
         logits_last = outputs.logits[:, -1, :]  # [B, V]
@@ -259,12 +259,12 @@ class FTPOTrainer(DPOTrainer):
                     with self.null_ref_context():
                         ref_logits_last = model(
                             ids, attention_mask=attn, position_ids=pos_full,
-                            use_cache=False, return_dict=True,
+                            use_cache=False, return_dict=True, logits_to_keep=1,
                         ).logits[:, -1, :]
                 else:
                     ref_logits_last = self.ref_model(
                         ids, attention_mask=attn, position_ids=pos_full,
-                        use_cache=False, return_dict=True,
+                        use_cache=False, return_dict=True, logits_to_keep=1,
                     ).logits[:, -1, :]
 
             tether_mask = torch.ones_like(logits_last, dtype=torch.bool)

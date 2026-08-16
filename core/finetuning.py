@@ -476,6 +476,16 @@ def run_dpo_finetune(config: dict, experiment_run_dir: Path):
             target_modules   = config["finetune_target_modules"],
         )
         model = get_peft_model(model, lora_cfg)
+        if config.get("finetune_gradient_checkpointing", True):
+            # This key was previously only honoured on the unsloth branch,
+            # so the transformers path trained with checkpointing off (#3).
+            # use_reentrant=True: the non-reentrant checkpointer fails at
+            # step 0 with a metadata mismatch on ftpo's packed batches.
+            model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": True}
+            )
+            model.enable_input_require_grads()
+            model.config.use_cache = False
         if config.get("finetune_freeze_early_layers", False):
             freeze_lora_to_last_k_layers(model,
                 k=config["finetune_n_layers_unfrozen"],
